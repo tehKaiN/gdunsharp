@@ -67,6 +67,7 @@ Current level: 0.
 - `using Foo = Bar`
 - reading properties
 - reading method bodies
-- Newtonsoft.JSON
+- reading scoped namespaces
+- somehow support Newtonsoft.JSON
 - build as GDExtension
 - build as engine module
