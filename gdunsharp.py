@@ -60,7 +60,12 @@ class CodeClassKind(Enum):
     INTERFACE = 3
 
 
-class CodeClass(CodeIdentifier):
+class CodeType(CodeIdentifier):
+    def __init__(self, name: str):
+        super().__init__(name)
+
+
+class CodeClass(CodeType):
     def __init__(self, name: str, kind: CodeClassKind):
         super().__init__(name)
         self.kind = kind
@@ -70,12 +75,24 @@ class CodeClass(CodeIdentifier):
         self.methods: list[CodeMethod] = []
 
 
+class CodeEnumValue(CodeIdentifier):
+    def __init__(self, name: str, value: str | None):
+        super().__init__(name)
+        self.value = value if value else ""
+
+
+class CodeEnum(CodeType):
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.values: list[CodeEnumValue] = []
+
+
 class CodeNamespace(CodeIdentifier):
     def __init__(self, name: str, parent: CodeNamespace | None):
         super().__init__(name)
         self.parent = parent
         self.children: dict[str, CodeNamespace] = {}
-        self.types: dict[str, CodeClass] = {}
+        self.types: dict[str, CodeType] = {}
 
         if parent:
             parent.children[name] = self
@@ -89,7 +106,7 @@ class CodeNamespace(CodeIdentifier):
         return full_namespace
 
 
-class CodeDatabase:
+class Codebase:
     def __init__(self):
         self.global_namespace = CodeNamespace(name="", parent=None)
 
@@ -118,14 +135,12 @@ def find_node_by_grammar_name(node: Node, grammar_name: str) -> Node | None:
     return found_node
 
 
-def get_or_create_namespace_from_node(
-    namespace_node: Node, code_database: CodeDatabase
-) -> CodeNamespace:
-    first_child = namespace_node.named_children[0]
+def get_or_create_namespace_from_node(node: Node, codebase: Codebase) -> CodeNamespace:
+    first_child = node.named_children[0]
     assert first_child.grammar_name == NodeKind.QUALIFIED_NAME.value
     assert first_child.text
     namespace_chain = first_child.text.decode().split(".")
-    parent_namespace = code_database.global_namespace
+    parent_namespace = codebase.global_namespace
     for segment_name in namespace_chain:
         if segment_name not in parent_namespace.children:
             ns = CodeNamespace(segment_name, parent_namespace)
@@ -135,10 +150,8 @@ def get_or_create_namespace_from_node(
     return parent_namespace
 
 
-def get_or_create_class_from_node(
-    class_node: Node, code_database: CodeDatabase, namespace: CodeNamespace
-) -> CodeClass:
-    match class_node.grammar_name:
+def get_or_create_class_from_node(node: Node, namespace: CodeNamespace) -> CodeClass:
+    match node.grammar_name:
         case NodeKind.CLASS_DECLARATION.value:
             kind = CodeClassKind.CLASS
         case NodeKind.IFACE_DECLARATION.value:
@@ -146,7 +159,7 @@ def get_or_create_class_from_node(
         case NodeKind.STRUCT_DECLARATION.value:
             kind = CodeClassKind.STRUCT
 
-    for child in class_node.named_children:
+    for child in node.named_children:
         if child.grammar_name == NodeKind.IDENTIFIER.value:
             assert child.text
             class_name = child.text.decode()
@@ -160,41 +173,60 @@ def get_or_create_class_from_node(
             f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
         )
     else:
-        code_class = namespace.types[class_name]
+        found_type = namespace.types[class_name]
+        assert isinstance(found_type, CodeClass)
+        code_class = found_type
     return code_class
 
 
+def get_or_create_enum_from_node(node: Node, namespace: CodeNamespace) -> CodeEnum:
+    for child in node.named_children:
+        if child.grammar_name == NodeKind.IDENTIFIER.value:
+            assert child.text
+            enum_name = child.text.decode()
+            break
+
+    assert enum_name
+    if enum_name not in namespace.types:
+        code_enum = CodeEnum(enum_name)
+        namespace.types[enum_name] = code_enum
+        print(f"Found enum {enum_name} in namespace {namespace.get_full_path()}")
+    else:
+        found_type = namespace.types[enum_name]
+        assert isinstance(found_type, CodeEnum)
+        code_enum = found_type
+    return code_enum
+
+
 def traverse_tree_level(
-    parent_node: Node, code_database: CodeDatabase, namespace_stack: list[CodeNamespace]
+    parent_node: Node, codebase: Codebase, namespace_stack: list[CodeNamespace]
 ):
     for child_node in parent_node.named_children:
         match child_node.grammar_name:
             case NodeKind.FILE_NAMESPACE.value:
                 current_namespace = get_or_create_namespace_from_node(
-                    child_node, code_database
+                    child_node, codebase
                 )
                 namespace_stack.append(current_namespace)
             case NodeKind.CLASS_DECLARATION.value | NodeKind.IFACE_DECLARATION.value:
-                get_or_create_class_from_node(
-                    child_node, code_database, namespace_stack[-1]
-                )
+                get_or_create_class_from_node(child_node, namespace_stack[-1])
+            case NodeKind.ENUM_DECLARATION.value:
+                get_or_create_enum_from_node(child_node, namespace_stack[-1])
 
 
-def gather_namespace_and_types(
-    trees_by_path: dict[str, Tree], code_database: CodeDatabase
-):
+def gather_namespace_and_types(trees_by_path: dict[str, Tree], codebase: Codebase):
     for path in trees_by_path:
         tree = trees_by_path[path]
-        namespace_stack = [code_database.global_namespace]
-        traverse_tree_level(tree.root_node, code_database, namespace_stack)
+        namespace_stack = [codebase.global_namespace]
+        traverse_tree_level(tree.root_node, codebase, namespace_stack)
 
 
 print(f"Parsing C# files...")
 trees = parse_files("test_scripts/gdfire")
-code_database = CodeDatabase()
 
 print(f"Gathering namespaces and types...")
-gather_namespace_and_types(trees, code_database)
+codebase = Codebase()
+gather_namespace_and_types(trees, codebase)
 
 # Step 2: build code database of stuff in file
 # Step 3: emit cpp code based on the code database
