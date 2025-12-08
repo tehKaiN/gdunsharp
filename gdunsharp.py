@@ -1,8 +1,19 @@
 from __future__ import annotations
-from dataclasses import dataclass
 import glob
+from enum import Enum
 import tree_sitter_c_sharp
 from tree_sitter import Language, Parser, Node, Tree
+
+
+class NodeKind(Enum):
+    CLASS_DECLARATION = "class_declaration"
+    IFACE_DECLARATION = "interface_declaration"
+    STRUCT_DECLARATION = "struct_declaration"
+    ENUM_DECLARATION = "enum_declaration"
+    QUALIFIED_NAME = "qualified_name"
+    FILE_NAMESPACE = "file_scoped_namespace_declaration"
+    IDENTIFIER = "identifier"
+    LITERAL_INT = "integer_literal"
 
 
 class CodeIdentifier:
@@ -43,9 +54,16 @@ class CodeProperty(CodeIdentifier):
         self.getter = getter
 
 
+class CodeClassKind(Enum):
+    CLASS = 1
+    STRUCT = 2
+    INTERFACE = 3
+
+
 class CodeClass(CodeIdentifier):
-    def __init__(self, name: str):
+    def __init__(self, name: str, kind: CodeClassKind):
         super().__init__(name)
+        self.kind = kind
         self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
         self.fields: list[CodeField] = []
@@ -104,7 +122,7 @@ def get_or_create_namespace_from_node(
     namespace_node: Node, code_database: CodeDatabase
 ) -> CodeNamespace:
     first_child = namespace_node.named_children[0]
-    assert first_child.grammar_name == "qualified_name"
+    assert first_child.grammar_name == NodeKind.QUALIFIED_NAME.value
     assert first_child.text
     namespace_chain = first_child.text.decode().split(".")
     parent_namespace = code_database.global_namespace
@@ -120,17 +138,27 @@ def get_or_create_namespace_from_node(
 def get_or_create_class_from_node(
     class_node: Node, code_database: CodeDatabase, namespace: CodeNamespace
 ) -> CodeClass:
+    match class_node.grammar_name:
+        case NodeKind.CLASS_DECLARATION.value:
+            kind = CodeClassKind.CLASS
+        case NodeKind.IFACE_DECLARATION.value:
+            kind = CodeClassKind.INTERFACE
+        case NodeKind.STRUCT_DECLARATION.value:
+            kind = CodeClassKind.STRUCT
+
     for child in class_node.named_children:
-        if child.grammar_name == "identifier":
+        if child.grammar_name == NodeKind.IDENTIFIER.value:
             assert child.text
             class_name = child.text.decode()
             break
 
     assert class_name
     if class_name not in namespace.types:
-        code_class = CodeClass(class_name)
+        code_class = CodeClass(class_name, kind)
         namespace.types[class_name] = code_class
-        # print(f"Found class {class_name} in namespace {namespace.get_full_path()}")
+        print(
+            f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
+        )
     else:
         code_class = namespace.types[class_name]
     return code_class
@@ -140,15 +168,16 @@ def traverse_tree_level(
     parent_node: Node, code_database: CodeDatabase, namespace_stack: list[CodeNamespace]
 ):
     for child_node in parent_node.named_children:
-        if child_node.grammar_name == "file_scoped_namespace_declaration":
-            current_namespace = get_or_create_namespace_from_node(
-                child_node, code_database
-            )
-            namespace_stack.append(current_namespace)
-        elif child_node.grammar_name == "class_declaration":
-            get_or_create_class_from_node(
-                child_node, code_database, namespace_stack[-1]
-            )
+        match child_node.grammar_name:
+            case NodeKind.FILE_NAMESPACE.value:
+                current_namespace = get_or_create_namespace_from_node(
+                    child_node, code_database
+                )
+                namespace_stack.append(current_namespace)
+            case NodeKind.CLASS_DECLARATION.value | NodeKind.IFACE_DECLARATION.value:
+                get_or_create_class_from_node(
+                    child_node, code_database, namespace_stack[-1]
+                )
 
 
 def gather_namespace_and_types(

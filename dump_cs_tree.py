@@ -5,7 +5,13 @@ from tree_sitter import Language, Parser, Node
 def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
     if prefix:
         print(prefix[:-1] + "-", end="")
-    if node.grammar_name in ["identifier", "modifier", "comment", "qualified_name"]:
+    if node.grammar_name in [
+        "identifier",
+        "modifier",
+        "comment",
+        "qualified_name",
+        "integer_literal",
+    ]:
         node_text = node.text.decode() if node.text is not None else "[None]"
         print(f"{node.grammar_name}: '{node_text}'")
     else:
@@ -23,7 +29,7 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
 LANG_CSHARP = Language(tree_sitter_c_sharp.language())
 parser = Parser(LANG_CSHARP)
 
-file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\MapManager.cs").read().encode()
+file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\Team.cs").read().encode()
 tree = parser.parse(file_bytes)
 
 print_tree_node(tree.root_node)
