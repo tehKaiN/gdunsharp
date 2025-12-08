@@ -11,31 +11,31 @@ class CodeIdentifier:
 
 
 class CodeParam(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType, default_value: str):
+    def __init__(self, name: str, type: CodeClass, default_value: str):
         super().__init__(name)
         self.type = type
         self.default_value = default_value
 
 
 class CodeMethod(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType, is_extension: bool, body_node: Node):
+    def __init__(self, name: str, type: CodeClass, is_extension: bool, body_node: Node):
         super().__init__(name)
         self.type = type
         self.is_extension = is_extension
-        self.generic_params: list[CodeType] = []
+        self.generic_params: list[CodeClass] = []
         self.params: list[CodeParam] = []
         self.body_node = body_node
 
 
 class CodeField(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType):
+    def __init__(self, name: str, type: CodeClass):
         super().__init__(name)
         self.type = type
 
 
 class CodeProperty(CodeIdentifier):
     def __init__(
-        self, name: str, type: CodeType, setter: CodeMethod, getter: CodeMethod
+        self, name: str, type: CodeClass, setter: CodeMethod, getter: CodeMethod
     ):
         super().__init__(name)
         self.type = type
@@ -43,10 +43,10 @@ class CodeProperty(CodeIdentifier):
         self.getter = getter
 
 
-class CodeType(CodeIdentifier):
+class CodeClass(CodeIdentifier):
     def __init__(self, name: str):
         super().__init__(name)
-        self.ancestors: list[CodeType] = []
+        self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
         self.fields: list[CodeField] = []
         self.methods: list[CodeMethod] = []
@@ -57,10 +57,18 @@ class CodeNamespace(CodeIdentifier):
         super().__init__(name)
         self.parent = parent
         self.children: dict[str, CodeNamespace] = {}
-        self.types: list[CodeType] = []
+        self.types: dict[str, CodeClass] = {}
 
         if parent:
             parent.children[name] = self
+
+    def get_full_path(self) -> str:
+        full_namespace = self.name
+        parent = self.parent
+        while parent and parent.name:
+            full_namespace = f"{parent.name}.{full_namespace}"
+            parent = parent.parent
+        return full_namespace
 
 
 class CodeDatabase:
@@ -92,32 +100,72 @@ def find_node_by_grammar_name(node: Node, grammar_name: str) -> Node | None:
     return found_node
 
 
-def gather_namespaces(trees_by_path: dict[str, Tree], code_database: CodeDatabase):
+def get_or_create_namespace_from_node(
+    namespace_node: Node, code_database: CodeDatabase
+) -> CodeNamespace:
+    first_child = namespace_node.named_children[0]
+    assert first_child.grammar_name == "qualified_name"
+    assert first_child.text
+    namespace_chain = first_child.text.decode().split(".")
+    parent_namespace = code_database.global_namespace
+    for segment_name in namespace_chain:
+        if segment_name not in parent_namespace.children:
+            ns = CodeNamespace(segment_name, parent_namespace)
+            parent_namespace = ns
+        else:
+            parent_namespace = parent_namespace.children[segment_name]
+    return parent_namespace
+
+
+def get_or_create_class_from_node(
+    class_node: Node, code_database: CodeDatabase, namespace: CodeNamespace
+) -> CodeClass:
+    for child in class_node.named_children:
+        if child.grammar_name == "identifier":
+            assert child.text
+            class_name = child.text.decode()
+            break
+
+    assert class_name
+    if class_name not in namespace.types:
+        code_class = CodeClass(class_name)
+        namespace.types[class_name] = code_class
+        # print(f"Found class {class_name} in namespace {namespace.get_full_path()}")
+    else:
+        code_class = namespace.types[class_name]
+    return code_class
+
+
+def traverse_tree_level(
+    parent_node: Node, code_database: CodeDatabase, namespace_stack: list[CodeNamespace]
+):
+    for child_node in parent_node.named_children:
+        if child_node.grammar_name == "file_scoped_namespace_declaration":
+            current_namespace = get_or_create_namespace_from_node(
+                child_node, code_database
+            )
+            namespace_stack.append(current_namespace)
+        elif child_node.grammar_name == "class_declaration":
+            get_or_create_class_from_node(
+                child_node, code_database, namespace_stack[-1]
+            )
+
+
+def gather_namespace_and_types(
+    trees_by_path: dict[str, Tree], code_database: CodeDatabase
+):
     for path in trees_by_path:
         tree = trees_by_path[path]
-        namespace_node = find_node_by_grammar_name(
-            tree.root_node, "file_scoped_namespace_declaration"
-        )
-        if namespace_node:
-            first_child = namespace_node.named_children[0]
-            if first_child.grammar_name == "qualified_name":
-                assert first_child.text
-                namespace_chain = first_child.text.decode().split(".")
-                parent_namespace = code_database.global_namespace
-                for segment_name in namespace_chain:
-                    if segment_name not in parent_namespace.children:
-                        ns = CodeNamespace(segment_name, parent_namespace)
-                        parent_namespace = ns
-                    else:
-                        parent_namespace = parent_namespace.children[segment_name]
+        namespace_stack = [code_database.global_namespace]
+        traverse_tree_level(tree.root_node, code_database, namespace_stack)
 
 
 print(f"Parsing C# files...")
 trees = parse_files("test_scripts/gdfire")
 code_database = CodeDatabase()
 
-print(f"Gathering namespaces...")
-gather_namespaces(trees, code_database)
+print(f"Gathering namespaces and types...")
+gather_namespace_and_types(trees, code_database)
 
 # Step 2: build code database of stuff in file
 # Step 3: emit cpp code based on the code database

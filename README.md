@@ -41,6 +41,7 @@ Current level: 0.
 - constructing namespace hierarchy
 - reading interface signatures
 - reading class signatures
+- reading enum signatures
 - reading field signatures
 
 ### Level 2
@@ -49,6 +50,7 @@ Current level: 0.
 - emitting empty classes in .hpp files
 - emitting fields in interfaces
 - emitting fields in classes
+- emitting enums
 - preventing emission of interface fields in classes
 
 ### Level 3
@@ -59,15 +61,18 @@ Current level: 0.
 
 ### Level 4
 
+- reading nested classes
+- emitting nested classes
 - reading signal signatures
 - emitting signals
 
 ### Uncategorized
 
-- `using Foo = Bar`
 - reading properties
 - reading method bodies
-- reading scoped namespaces
+- `async`/`await`
 - somehow support Newtonsoft.JSON
-- build as GDExtension
 - build as engine module
+- `using Foo = Bar`
+- reading scoped namespaces
+- build as GDExtension
