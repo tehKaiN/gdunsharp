@@ -34,7 +34,7 @@ The code translation works as follows:
 ## TODO
 
 Development is split across complexity levels.
-Current level: 0.
+Current level: 1.
 
 ### Level 1
 
@@ -43,6 +43,7 @@ Current level: 0.
 - reading class signatures
 - reading enum signatures
 - reading field signatures
+- support for basic godot/builtin types
 
 ### Level 2
 
@@ -55,16 +56,21 @@ Current level: 0.
 
 ### Level 3
 
+- reading fields with generic types
+- reading fields with array types
+- reading fields with dict types
+- translating c# arrays to c++ vectors
 - reading method signatures
 - emitting dummy methods in .cpp files
 - making sure stuff builds at all
 
 ### Level 4
 
-- reading nested classes
-- emitting nested classes
+- reading nested types in classes
+- resolving nested types in classes
+- emitting nested types
 - reading signal signatures
-- emitting signals
+- emitting signal code
 
 ### Uncategorized
 
