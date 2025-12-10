@@ -16,23 +16,33 @@ Current level: **1**.
 
 - emitting empty interfaces in .hpp files
 - emitting empty classes in .hpp files
-- emitting fields in interfaces
 - emitting fields in classes
 - emitting enums
-- preventing emission of interface fields in classes
+- add namespace includes in .hpp files
+- add subincludes in namespace includes
 
 ## Level 3
 
 - reading fields with generic types
 - reading fields with array types
 - reading fields with dict types
-- translating c# arrays to c++ vectors
 - reading method signatures
-- emitting dummy methods in .cpp files
-- making sure stuff builds at all
+- emitting method signatures in classes
+- emitting dummy method bodies in .cpp files
 
 ## Level 4
 
+- reading properties
+- emitting virtual properties for interfaces
+- emitting properties for classes
+- emitting virtual methods for interfaces
+- preserving virtual/override in methods
+- translating c# arrays to c++ vectors
+- making sure stuff builds at all
+
+## Level 5
+
+- reading method bodies
 - reading nested types in classes
 - resolving nested types in classes
 - emitting nested types
@@ -41,8 +51,7 @@ Current level: **1**.
 
 ## Uncategorized
 
-- reading properties
-- reading method bodies
+- emitting method bodies
 - `async`/`await`
 - somehow support Newtonsoft.JSON
 - build as engine module
