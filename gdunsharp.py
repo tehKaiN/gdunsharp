@@ -122,11 +122,11 @@ class ClassNodeContext:
         self,
         declaration_list_node: Node,
         parent_namespace: CodeNamespace,
-        usings: list[str],
+        using_strs: list[str],
     ):
         self.declaration_list_node = declaration_list_node
         self.parent_namespace = parent_namespace
-        self.usings = usings
+        self.using_strs = using_strs
 
 
 class CodeClass(CodeType):
@@ -137,6 +137,7 @@ class CodeClass(CodeType):
         self.properties: list[CodeProperty] = []
         self.fields: dict[str, CodeField] = {}
         self.methods: list[CodeMethod] = []
+        self.usings: list[CodeNamespace] = []
 
         self.contexts: list[ClassNodeContext] = []
 
@@ -145,8 +146,18 @@ class CodeClass(CodeType):
 
     def get_header_contents(self) -> str:
         out = "#pragma once\n\n"
+
+        for using in self.usings:
+            out += f"#include <{using.get_header_path()}>\n"
+        out += "\n"
+
         ns_name = self.parent_namespace.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
+
+        for using in self.usings:
+            out += f"using namespace {using.get_full_path().replace('.','::')};\n"
+        out += "\n"
+
         out += f"class {self.name} {{\n"
         out += "public:\n"
 
@@ -204,6 +215,15 @@ class CodeNamespace(CodeIdentifier):
             full_namespace = f"{parent.name}.{full_namespace}"
             parent = parent.parent
         return full_namespace
+
+    def get_header_path(self) -> str:
+        full_path = camel_to_snake(self.name)
+        parent = self.parent
+        while parent and parent.name:
+            full_path = f"{camel_to_snake(parent.name)}/{full_path}"
+            parent = parent.parent
+
+        return f"{full_path}/namespace.hpp"
 
     def get_all_types(self) -> list[CodeType]:
         types = []
@@ -427,7 +447,7 @@ def create_class_field(
     assert type_node.text
     type_name = type_node.text.decode()
     field_type = codebase.resolve_type(
-        type_name, context.usings, context.parent_namespace
+        type_name, context.using_strs, context.parent_namespace
     )
     if not field_type:
         # TODO: replace with error
@@ -463,15 +483,20 @@ def gather_namespace_and_types(trees_by_path: dict[str, Tree], codebase: Codebas
         traverse_tree_level(tree.root_node, codebase, namespace, [])
 
 
-def gather_class_fields(codebase: Codebase):
+def gather_class_fields_and_usings(codebase: Codebase):
     classlikes = [t for t in codebase.get_all_types() if isinstance(t, CodeClass)]
     print(f"Got {len(classlikes)} class-likes")
     for classlike in classlikes:
-        for node_context in classlike.contexts:
-            for declaration_node in node_context.declaration_list_node.named_children:
+        for context in classlike.contexts:
+            for declaration_node in context.declaration_list_node.named_children:
                 match declaration_node.grammar_name:
                     case NodeKind.FIELD_DECLARATION.value:
-                        create_class_field(classlike, declaration_node, node_context)
+                        create_class_field(classlike, declaration_node, context)
+
+            for using in context.using_strs:
+                ns = codebase.get_namespace(using)
+                if ns not in classlike.usings:
+                    classlike.usings.append(ns)
 
 
 def prepare_out_directory(out_path: str):
@@ -540,7 +565,7 @@ print("Gathering namespaces and types...")
 codebase = Codebase()
 populate_with_dummy(codebase)
 gather_namespace_and_types(trees, codebase)
-gather_class_fields(codebase)
+gather_class_fields_and_usings(codebase)
 
 # Step 3: emit cpp code based on the code database
 prepare_out_directory(out_path)
