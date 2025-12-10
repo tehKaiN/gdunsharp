@@ -147,6 +147,12 @@ class CodeClass(CodeType):
     def get_header_contents(self) -> str:
         out = "#pragma once\n\n"
 
+        parent_ns: CodeNamespace | None = self.parent_namespace
+        while parent_ns and parent_ns.name != "":
+            out += f"#include <{parent_ns.get_header_path()}>\n"
+            parent_ns = parent_ns.parent
+        out += "\n"
+
         for using in self.usings:
             out += f"#include <{using.get_header_path()}>\n"
         out += "\n"
