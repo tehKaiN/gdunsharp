@@ -30,6 +30,8 @@ class NodeKind(Enum):
     IFACE_DECLARATION = "interface_declaration"
     STRUCT_DECLARATION = "struct_declaration"
     ENUM_DECLARATION = "enum_declaration"
+    ENUM_DECLARATION_LIST = "enum_member_declaration_list"
+    ENUM_MEMBER_DECLARATION = "enum_member_declaration"
     QUALIFIED_NAME = "qualified_name"
     FILE_NAMESPACE = "file_scoped_namespace_declaration"
     IDENTIFIER = "identifier"
@@ -156,16 +158,16 @@ class CodeClass(CodeType):
         return out
 
 
-class CodeEnumValue(CodeIdentifier):
+class CodeEnumEntry(CodeIdentifier):
     def __init__(self, name: str, value: str | None):
         super().__init__(name)
-        self.value = value if value else ""
+        self.value = value
 
 
 class CodeEnum(CodeType):
     def __init__(self, name: str, parent_namespace: CodeNamespace):
         super().__init__(name, parent_namespace)
-        self.values: list[CodeEnumValue] = []
+        self.entries: list[CodeEnumEntry] = []
 
     def get_forward_declaration(self) -> str:
         return f"enum class {self.name};"
@@ -174,7 +176,11 @@ class CodeEnum(CodeType):
         out = "#pragma once\n\n"
         ns_name = self.parent_namespace.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
-        out += f"enum class {self.name} {{\n\n"
+        out += f"enum class {self.name} {{\n"
+
+        for entry in self.entries:
+            value_str = f" = {entry.value}" if entry.value else ""
+            out += f"\t{entry.name}{value_str},\n"
 
         out += f"}};\n\n"
         out += f"}} // namespace {ns_name}\n"
@@ -342,9 +348,9 @@ def get_or_create_class_from_node(
     assert class_name
     if class_name not in namespace.types:
         code_class = CodeClass(class_name, kind, namespace)
-        print(
-            f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
-        )
+        # print(
+        #     f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
+        # )
     else:
         found_type = namespace.types[class_name]
         assert isinstance(found_type, CodeClass)
@@ -360,17 +366,38 @@ def get_or_create_class_from_node(
     return code_class
 
 
+def parse_enum_declaration_list(enum: CodeEnum, declaration_list_node: Node):
+    for member_declaration in declaration_list_node.named_children:
+        assert member_declaration.grammar_name == NodeKind.ENUM_MEMBER_DECLARATION.value
+        name_node = member_declaration.named_children[0]
+        assert name_node.grammar_name == NodeKind.IDENTIFIER.value
+        assert name_node.text
+        value_text: str | None = None
+        if len(member_declaration.named_children) > 1:
+            value_node = member_declaration.named_children[1]
+            assert value_node.text
+            value_text = value_node.text.decode()
+        enum.entries.append(CodeEnumEntry(name_node.text.decode(), value_text))
+
+
 def get_or_create_enum_from_node(node: Node, namespace: CodeNamespace) -> CodeEnum:
+    assert node.grammar_name == NodeKind.ENUM_DECLARATION.value
+    enum_name: str | None = None
+    declaration_list_node: Node | None = None
     for child in node.named_children:
         if child.grammar_name == NodeKind.IDENTIFIER.value:
             assert child.text
-            enum_name = child.text.decode()
-            break
+            if not enum_name:
+                enum_name = child.text.decode()
+        elif child.grammar_name == NodeKind.ENUM_DECLARATION_LIST.value:
+            declaration_list_node = child
 
     assert enum_name
     if enum_name not in namespace.types:
         code_enum = CodeEnum(enum_name, namespace)
-        print(f"Found enum {enum_name} in namespace {namespace.get_full_path()}")
+        if declaration_list_node:
+            parse_enum_declaration_list(code_enum, declaration_list_node)
+        # print(f"Found enum {enum_name} in namespace {namespace.get_full_path()}")
     else:
         found_type = namespace.types[enum_name]
         assert isinstance(found_type, CodeEnum)
@@ -410,7 +437,7 @@ def create_class_field(
     field_name = name_node.text.decode()
     field = CodeField(field_name, field_type)
     classlike.fields[field.name] = field
-    print(f"Added field {classlike.name}.{field.name} of type {field_type.name}")
+    # print(f"Added field {classlike.name}.{field.name} of type {field_type.name}")
     return field
 
 
