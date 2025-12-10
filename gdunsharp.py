@@ -111,6 +111,9 @@ class CodeType(CodeIdentifier):
             with open(f"{path}/{camel_to_snake(self.name)}.hpp", "w") as out_file:
                 out_file.write(self.get_header_contents())
 
+    def get_include_path(self) -> str:
+        return f"{self.parent_namespace.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
+
 
 class DummyType(CodeType):
     def __init__(self, name, parent_namespace):
@@ -222,14 +225,16 @@ class CodeNamespace(CodeIdentifier):
             parent = parent.parent
         return full_namespace
 
-    def get_header_path(self) -> str:
-        full_path = camel_to_snake(self.name)
+    def get_directory_path(self) -> str:
+        dir_path = camel_to_snake(self.name)
         parent = self.parent
         while parent and parent.name:
-            full_path = f"{camel_to_snake(parent.name)}/{full_path}"
+            dir_path = f"{camel_to_snake(parent.name)}/{dir_path}"
             parent = parent.parent
+        return dir_path
 
-        return f"{full_path}/namespace.hpp"
+    def get_header_path(self) -> str:
+        return f"{self.get_directory_path()}/namespace.hpp"
 
     def get_all_types(self) -> list[CodeType]:
         types = []
@@ -252,12 +257,16 @@ class CodeNamespace(CodeIdentifier):
     def get_namespace_header(self) -> str:
         ns_name = self.get_full_path().replace(".", "::")
         out = "#pragma once\n\n"
+
         out += f"namespace {ns_name} {{\n\n"
         for type in self.types.values():
             if not type.is_dummy:
                 out += f"{type.get_forward_declaration()}\n"
-        out += f"\n}} // namespace {ns_name}\n"
+        out += f"\n}} // namespace {ns_name}\n\n"
 
+        for type in self.types.values():
+            if not type.is_dummy:
+                out += f"#include <{type.get_include_path()}>\n"
         out += "\n"
         return out
 
