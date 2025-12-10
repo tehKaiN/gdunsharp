@@ -1,8 +1,28 @@
 from __future__ import annotations
+import os
 import glob
 from enum import Enum
 import tree_sitter_c_sharp
 from tree_sitter import Language, Parser, Node, Tree
+
+# TODO nested classes:
+# ERR: type AiState not found
+# ERR: type SummaryMode not found
+
+# TODO collection types:
+# ERR: type HashSet<ITeamMember> not found
+# ERR: type List<TurretTower> not found
+# ERR: type List<SpawnPoint> not found
+# ERR: type List<ControlPoint> not found
+# ERR: type List<Player> not found
+# ERR: type List<Tank> not found
+# ERR: type Dictionary<Player, PlayerStats> not found
+# ERR: type HashSet<ITargetableTeamMember> not found
+
+
+# https://stackoverflow.com/questions/1175208/
+def camel_to_snake(s: str) -> str:
+    return "".join(["_" + c.lower() if c.isupper() else c for c in s]).lstrip("_")
 
 
 class NodeKind(Enum):
@@ -67,8 +87,29 @@ class CodeClassKind(Enum):
 
 
 class CodeType(CodeIdentifier):
-    def __init__(self, name: str):
+    def __init__(
+        self, name: str, parent_namespace: CodeNamespace, is_dummy: bool = False
+    ):
         super().__init__(name)
+        self.parent_namespace = parent_namespace
+        self.is_dummy = is_dummy
+        parent_namespace.types[name] = self
+
+    def get_forward_declaration(self) -> str:
+        raise NotImplementedError("CodeType.get_forward_declaration()")
+
+    def get_header_contents(self) -> str:
+        raise NotImplementedError("CodeType.get_header_contents()")
+
+    def emit_cpp(self, path: str):
+        if not self.is_dummy:
+            with open(f"{path}/{camel_to_snake(self.name)}.hpp", "w") as out_file:
+                out_file.write(self.get_header_contents())
+
+
+class DummyType(CodeType):
+    def __init__(self, name, parent_namespace):
+        super().__init__(name, parent_namespace, is_dummy=True)
 
 
 class ClassNodeContext:
@@ -84,8 +125,8 @@ class ClassNodeContext:
 
 
 class CodeClass(CodeType):
-    def __init__(self, name: str, kind: CodeClassKind):
-        super().__init__(name)
+    def __init__(self, name: str, kind: CodeClassKind, parent_namespace: CodeNamespace):
+        super().__init__(name, parent_namespace)
         self.kind = kind
         self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
@@ -93,6 +134,19 @@ class CodeClass(CodeType):
         self.methods: list[CodeMethod] = []
 
         self.contexts: list[ClassNodeContext] = []
+
+    def get_forward_declaration(self) -> str:
+        return f"class {self.name};"
+
+    def get_header_contents(self) -> str:
+        out = "#pragma once\n\n"
+        ns_name = self.parent_namespace.get_full_path().replace(".", "::")
+        out += f"namespace {ns_name} {{\n\n"
+        out += f"class {self.name} {{\n\n"
+
+        out += f"}};\n\n"
+        out += f"}} // namespace {ns_name}\n"
+        return out
 
 
 class CodeEnumValue(CodeIdentifier):
@@ -102,9 +156,22 @@ class CodeEnumValue(CodeIdentifier):
 
 
 class CodeEnum(CodeType):
-    def __init__(self, name: str):
-        super().__init__(name)
+    def __init__(self, name: str, parent_namespace: CodeNamespace):
+        super().__init__(name, parent_namespace)
         self.values: list[CodeEnumValue] = []
+
+    def get_forward_declaration(self) -> str:
+        return f"enum class {self.name};"
+
+    def get_header_contents(self) -> str:
+        out = "#pragma once\n\n"
+        ns_name = self.parent_namespace.get_full_path().replace(".", "::")
+        out += f"namespace {ns_name} {{\n\n"
+        out += f"enum class {self.name} {{\n\n"
+
+        out += f"}};\n\n"
+        out += f"}} // namespace {ns_name}\n"
+        return out
 
 
 class CodeNamespace(CodeIdentifier):
@@ -133,6 +200,28 @@ class CodeNamespace(CodeIdentifier):
             types += self.subnamespaces[child_name].get_all_types()
         return types
 
+    def emit_cpp(self, path: str):
+        os.makedirs(path, exist_ok=True)
+        with open(f"{path}/namespace.hpp", "w") as out_file:
+            out_file.write(self.get_namespace_header())
+        for subnamespace in self.subnamespaces.values():
+            subnamespace.emit_cpp(f"{path}/{camel_to_snake(subnamespace.name)}")
+
+        for type in self.types.values():
+            type.emit_cpp(f"{path}")
+
+    def get_namespace_header(self) -> str:
+        ns_name = self.get_full_path().replace(".", "::")
+        out = "#pragma once\n\n"
+        out += f"namespace {ns_name} {{\n\n"
+        for type in self.types.values():
+            if not type.is_dummy:
+                out += f"{type.get_forward_declaration()}\n"
+        out += f"\n}} // namespace {ns_name}\n"
+
+        out += "\n"
+        return out
+
 
 class Codebase:
     def __init__(self):
@@ -155,10 +244,14 @@ class Codebase:
         self, type_name: str, usings: list[str], parent_namespace: CodeNamespace
     ) -> CodeType | None:
         namespaces: list[CodeNamespace] = []
+
+        # Use parent namespace and all of its direct parents
         ns: CodeNamespace | None = parent_namespace
         while ns and ns != self.global_namespace:
             namespaces.append(ns)
             ns = ns.parent
+
+        # After that's exhausted, use specific namespaces from `using`s
         namespaces += [self.get_namespace(using) for using in usings]
         namespaces += [self.global_namespace]
 
@@ -168,6 +261,9 @@ class Codebase:
 
         print(f"ERR: type {type_name} not found")
         return None
+
+    def emit_cpp(self, path: str):
+        self.global_namespace.emit_cpp(path)
 
 
 def parse_files(root_path: str) -> dict[str, Tree]:
@@ -238,8 +334,7 @@ def get_or_create_class_from_node(
 
     assert class_name
     if class_name not in namespace.types:
-        code_class = CodeClass(class_name, kind)
-        namespace.types[class_name] = code_class
+        code_class = CodeClass(class_name, kind, namespace)
         print(
             f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
         )
@@ -267,8 +362,7 @@ def get_or_create_enum_from_node(node: Node, namespace: CodeNamespace) -> CodeEn
 
     assert enum_name
     if enum_name not in namespace.types:
-        code_enum = CodeEnum(enum_name)
-        namespace.types[enum_name] = code_enum
+        code_enum = CodeEnum(enum_name, namespace)
         print(f"Found enum {enum_name} in namespace {namespace.get_full_path()}")
     else:
         found_type = namespace.types[enum_name]
@@ -302,7 +396,8 @@ def create_class_field(
         type_name, context.usings, context.parent_namespace
     )
     if not field_type:
-        field_type = CodeType(type_name)
+        # TODO: replace with error
+        field_type = DummyType(type_name, context.parent_namespace)
 
     assert name_node.text
     field_name = name_node.text.decode()
@@ -345,57 +440,76 @@ def gather_class_fields(codebase: Codebase):
                         create_class_field(classlike, declaration_node, node_context)
 
 
-print("Parsing C# files...")
-trees = parse_files("test_scripts/gdfire")
+def prepare_out_directory(out_path: str):
+    if os.path.exists(out_path):
+        old_out_files = glob.glob(f"{out_path}/**/*.cs")
+        for f in old_out_files:
+            os.remove(f)
+    else:
+        os.makedirs(out_path, exist_ok=True)
 
+
+def populate_with_dummy(codebase: Codebase):
+    ns_system = CodeNamespace("System", codebase.global_namespace)
+    ns_system_linq = CodeNamespace("Linq", ns_system)
+    ns_system_collections = CodeNamespace("Collections", ns_system)
+    ns_system_collections_generic = CodeNamespace("Generic", ns_system_collections)
+    ns_system_io = CodeNamespace("IO", ns_system)
+    ns_system_text = CodeNamespace("Text", ns_system)
+    ns_system_text_regularexpressions = CodeNamespace(
+        "RegularExpressions", ns_system_text
+    )
+    ns_godot = CodeNamespace("Godot", codebase.global_namespace)
+    ns_gdunit4 = CodeNamespace("GdUnit4", codebase.global_namespace)
+    ns_gdunit4_assertions = CodeNamespace("Assertions", ns_gdunit4)
+
+    DummyType("AnimationPlayer", ns_godot)
+    DummyType("Area3D", ns_godot)
+    DummyType("Button", ns_godot)
+    DummyType("ButtonGroup", ns_godot)
+    DummyType("Color", ns_godot)
+    DummyType("ColorRect", ns_godot)
+    DummyType("Control", ns_godot)
+    DummyType("GpuParticles3D", ns_godot)
+    DummyType("HBoxContainer", ns_godot)
+    DummyType("Label", ns_godot)
+    DummyType("Marker3D", ns_godot)
+    DummyType("MeshInstance3D", ns_godot)
+    DummyType("NavigationAgent3D", ns_godot)
+    DummyType("Node", ns_godot)
+    DummyType("Node3D", ns_godot)
+    DummyType("PackedScene", ns_godot)
+    DummyType("ProgressBar", ns_godot)
+    DummyType("ShaderMaterial", ns_godot)
+    DummyType("StaticBody3D", ns_godot)
+    DummyType("Texture2D", ns_godot)
+    DummyType("Timer", ns_godot)
+    DummyType("VBoxContainer", ns_godot)
+    DummyType("Vector3", ns_godot)
+
+    DummyType("Regex", ns_system_text_regularexpressions)
+
+    DummyType("bool", codebase.global_namespace)
+    DummyType("float", codebase.global_namespace)
+    DummyType("int", codebase.global_namespace)
+    DummyType("int[]", codebase.global_namespace)
+    DummyType("string", codebase.global_namespace)
+
+
+print("Parsing C# files...")
+project_dir = "gdfire"
+trees = parse_files(f"test_scripts/{project_dir}")
+out_path = f"out/{project_dir}"
+
+# Step 2: build code database of stuff in file
 print("Gathering namespaces and types...")
 codebase = Codebase()
-ns_system = CodeNamespace("System", codebase.global_namespace)
-ns_system_linq = CodeNamespace("Linq", ns_system)
-ns_system_collections = CodeNamespace("Collections", ns_system)
-ns_system_collections_generic = CodeNamespace("Generic", ns_system_collections)
-ns_system_io = CodeNamespace("IO", ns_system)
-ns_system_text = CodeNamespace("Text", ns_system)
-ns_system_text_regularexpressions = CodeNamespace("RegularExpressions", ns_system_text)
-ns_godot = CodeNamespace("Godot", codebase.global_namespace)
-ns_gdunit4 = CodeNamespace("GdUnit4", codebase.global_namespace)
-ns_gdunit4_assertions = CodeNamespace("Assertions", ns_gdunit4)
-
-ns_godot.types["AnimationPlayer"] = CodeType("AnimationPlayer")
-ns_godot.types["Area3D"] = CodeType("Area3D")
-ns_godot.types["Button"] = CodeType("Button")
-ns_godot.types["ButtonGroup"] = CodeType("ButtonGroup")
-ns_godot.types["Color"] = CodeType("Color")
-ns_godot.types["ColorRect"] = CodeType("ColorRect")
-ns_godot.types["Control"] = CodeType("Control")
-ns_godot.types["GpuParticles3D"] = CodeType("GpuParticles3D")
-ns_godot.types["HBoxContainer"] = CodeType("HBoxContainer")
-ns_godot.types["Label"] = CodeType("Label")
-ns_godot.types["Marker3D"] = CodeType("Marker3D")
-ns_godot.types["MeshInstance3D"] = CodeType("MeshInstance3D")
-ns_godot.types["NavigationAgent3D"] = CodeType("NavigationAgent3D")
-ns_godot.types["Node"] = CodeType("Node")
-ns_godot.types["Node3D"] = CodeType("Node3D")
-ns_godot.types["PackedScene"] = CodeType("PackedScene")
-ns_godot.types["ProgressBar"] = CodeType("ProgressBar")
-ns_godot.types["ShaderMaterial"] = CodeType("ShaderMaterial")
-ns_godot.types["StaticBody3D"] = CodeType("StaticBody3D")
-ns_godot.types["Texture2D"] = CodeType("Texture2D")
-ns_godot.types["Timer"] = CodeType("Timer")
-ns_godot.types["VBoxContainer"] = CodeType("VBoxContainer")
-ns_godot.types["Vector3"] = CodeType("Vector3")
-
-ns_system_text_regularexpressions.types["Regex"] = CodeType("Regex")
-
-codebase.global_namespace.types["bool"] = CodeType("bool")
-codebase.global_namespace.types["float"] = CodeType("float")
-codebase.global_namespace.types["int"] = CodeType("int")
-codebase.global_namespace.types["int[]"] = CodeType("int[]")
-codebase.global_namespace.types["string"] = CodeType("string")
-
+populate_with_dummy(codebase)
 gather_namespace_and_types(trees, codebase)
 gather_class_fields(codebase)
 
-# Step 2: build code database of stuff in file
 # Step 3: emit cpp code based on the code database
+prepare_out_directory(out_path)
+codebase.emit_cpp(out_path)
+
 print("All done!")
