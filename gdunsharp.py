@@ -69,6 +69,9 @@ class CodeField(CodeIdentifier):
         super().__init__(name)
         self.type = type
 
+    def get_declaration(self) -> str:
+        return f"{self.type.name} {self.name};"
+
 
 class CodeProperty(CodeIdentifier):
     def __init__(
@@ -142,7 +145,11 @@ class CodeClass(CodeType):
         out = "#pragma once\n\n"
         ns_name = self.parent_namespace.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
-        out += f"class {self.name} {{\n\n"
+        out += f"class {self.name} {{\n"
+        out += "public:\n"
+
+        for field in self.fields.values():
+            out += f"\t{field.get_declaration()}\n"
 
         out += f"}};\n\n"
         out += f"}} // namespace {ns_name}\n"
