@@ -367,25 +367,12 @@ class Codebase:
     def resolve_type(
         self,
         type_id: str,
-        usings: list[str],
-        parent_namespace: CodeNamespace,
+        namespaces: list[CodeNamespace],
         parent_class: CodeClass | None,
     ) -> CodeType | None:
         if parent_class and len(parent_class.types_by_id):
             if type_id in parent_class.types_by_id:
                 return parent_class.types_by_id[type_id]
-
-        namespaces: list[CodeNamespace] = []
-
-        # Use parent namespace and all of its direct parents
-        ns: CodeNamespace | None = parent_namespace
-        while ns and ns != self.global_namespace:
-            namespaces.append(ns)
-            ns = ns.parent
-
-        # After that's exhausted, use specific namespaces from `using`s
-        namespaces += [self.get_namespace(using) for using in usings]
-        namespaces += [self.global_namespace]
 
         for namespace in namespaces:
             if type_id in namespace.types_by_id:
@@ -548,8 +535,7 @@ def get_or_create_enum_from_node(node: Node, namespace: CodeNamespace) -> CodeEn
 def get_generic_type_from_node(
     codebase: Codebase,
     type_node: Node,
-    using_strs: list[str],
-    parent_namespace: CodeNamespace,
+    namespaces: list[CodeNamespace],
     parent_class: CodeClass,
 ) -> CodeType:
     generic_type_name_node = type_node.named_children[0]
@@ -562,15 +548,11 @@ def get_generic_type_from_node(
     generic_args: list[CodeType] = []
     for arg_node in type_arg_list_node.named_children:
         generic_args.append(
-            get_type_from_node(
-                codebase, arg_node, using_strs, parent_namespace, parent_class
-            )
+            get_type_from_node(codebase, arg_node, namespaces, parent_class)
         )
 
     generic_type_id = CodeClass.get_id(generic_type_name, len(generic_args))
-    generic_type = codebase.resolve_type(
-        generic_type_id, using_strs, parent_namespace, parent_class
-    )
+    generic_type = codebase.resolve_type(generic_type_id, namespaces, parent_class)
     assert generic_type
     assert isinstance(generic_type, CodeClass)
     type = CodeClassSpecialized(generic_type, generic_args)
@@ -580,8 +562,7 @@ def get_generic_type_from_node(
 def get_array_type_from_node(
     codebase: Codebase,
     type_node: Node,
-    using_strs: list[str],
-    parent_namespace: CodeNamespace,
+    namespaces: list[CodeNamespace],
     parent_class: CodeClass,
 ) -> CodeType:
     assert len(type_node.named_children) == 2
@@ -589,8 +570,7 @@ def get_array_type_from_node(
     element_type = get_type_from_node(
         codebase,
         element_type_node,
-        using_strs,
-        parent_namespace,
+        namespaces,
         parent_class,
     )
 
@@ -601,8 +581,7 @@ def get_array_type_from_node(
     generic_type_id = CodeClass.get_id("List", 1)
     generic_type = codebase.resolve_type(
         generic_type_id,
-        using_strs + ["System.Collections.Generic"],
-        parent_namespace,
+        namespaces + [codebase.get_namespace("System.Collections.Generic")],
         parent_class,
     )
     assert generic_type
@@ -618,38 +597,35 @@ def get_array_type_from_node(
 def get_type_from_node(
     codebase: Codebase,
     type_node: Node,
-    using_strs: list[str],
-    parent_namespace: CodeNamespace,
+    namespaces: list[CodeNamespace],
     parent_class: CodeClass,
 ) -> CodeType:
     type: CodeType
     match type_node.grammar_name:
         case NodeKind.GENERIC_NAME.value:
             type = get_generic_type_from_node(
-                codebase, type_node, using_strs, parent_namespace, parent_class
+                codebase, type_node, namespaces, parent_class
             )
 
         case NodeKind.ARRAY_TYPE.value:
             type = get_array_type_from_node(
-                codebase, type_node, using_strs, parent_namespace, parent_class
+                codebase, type_node, namespaces, parent_class
             )
 
         case NodeKind.IDENTIFIER.value | NodeKind.PREDEFINED_TYPE.value:
             assert type_node.text
             type_id = type_node.text.decode()
-            resolved_type = codebase.resolve_type(
-                type_id, using_strs, parent_namespace, parent_class
-            )
+            resolved_type = codebase.resolve_type(type_id, namespaces, parent_class)
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
-                resolved_type = DummyType(type_id, parent_namespace)
+                resolved_type = DummyType(type_id, parent_class.parent_type_scope)
             type = resolved_type
 
     return type
 
 
 def create_class_field(
-    classlike: CodeClass, node: Node, context: ClassNodeContext
+    classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
 ) -> CodeField:
     declaration_node = find_node_by_grammar_name(
         node, NodeKind.VARIABLE_DECLARATION.value
@@ -658,9 +634,7 @@ def create_class_field(
     type_node = declaration_node.named_children[0]
     declarator_node = declaration_node.named_children[1]
 
-    field_type = get_type_from_node(
-        codebase, type_node, context.using_strs, context.parent_namespace, classlike
-    )
+    field_type = get_type_from_node(codebase, type_node, namespaces, classlike)
 
     assert declarator_node.grammar_name == NodeKind.VARIABLE_DECLARATOR.value
     name_node = declarator_node.named_children[0]
@@ -701,10 +675,23 @@ def gather_class_fields_and_usings(codebase: Codebase):
     print(f"Got {len(classlikes)} class-likes")
     for classlike in classlikes:
         for context in classlike.contexts:
+
+            namespaces: list[CodeNamespace] = []
+
+            # Use parent namespace and all of its direct parents
+            ns: CodeNamespace | None = context.parent_namespace
+            while ns and ns != codebase.global_namespace:
+                namespaces.append(ns)
+                ns = ns.parent
+
+            # After that's exhausted, use specific namespaces from `using`s
+            namespaces += [codebase.get_namespace(ns) for ns in context.using_strs]
+            namespaces += [codebase.global_namespace]
+
             for declaration_node in context.declaration_list_node.named_children:
                 match declaration_node.grammar_name:
                     case NodeKind.FIELD_DECLARATION.value:
-                        create_class_field(classlike, declaration_node, context)
+                        create_class_field(classlike, declaration_node, namespaces)
 
             for using in context.using_strs:
                 ns = codebase.get_namespace(using)
