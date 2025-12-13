@@ -88,15 +88,15 @@ class CodeClassKind(Enum):
 
 
 class CodeType(CodeIdentifier):
-    def __init__(self, name: str, id: str, parent_namespace: CodeNamespace):
+    def __init__(self, name: str, id: str, parent_type_scope: CodeTypeScope):
         super().__init__(name, id)
-        self.parent_namespace = parent_namespace
-        parent_namespace.types_by_id[id] = self
+        self.parent_type_scope = parent_type_scope
+        parent_type_scope.types_by_id[id] = self
 
     def is_dummy(self) -> bool:
         raise NotImplementedError("CodeType.is_dummy()")
 
-    def is_emmitable(self) -> bool:
+    def is_emmittable(self) -> bool:
         return not self.is_dummy()
 
     def get_forward_declaration(self) -> str:
@@ -106,20 +106,26 @@ class CodeType(CodeIdentifier):
         raise NotImplementedError("CodeType.get_header_contents()")
 
     def emit_cpp(self, path: str):
-        if self.is_emmitable():
+        if self.is_emmittable():
             with open(f"{path}/{camel_to_snake(self.name)}.hpp", "w") as out_file:
                 out_file.write(self.get_header_contents())
 
     def get_include_path(self) -> str:
-        return f"{self.parent_namespace.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
+        assert isinstance(self.parent_type_scope, CodeNamespace)
+        return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
 
 
 class DummyType(CodeType):
-    def __init__(self, name, parent_namespace):
-        super().__init__(name=name, id=name, parent_namespace=parent_namespace)
+    def __init__(self, name: str, parent_type_scope: CodeTypeScope):
+        super().__init__(name=name, id=name, parent_type_scope=parent_type_scope)
 
     def is_dummy(self):
         return True
+
+
+class CodeTypeScope:
+    def __init__(self: CodeTypeScope):
+        self.types_by_id: dict[str, CodeType] = {}
 
 
 class CodeClassSpecialized(CodeType):
@@ -128,21 +134,17 @@ class CodeClassSpecialized(CodeType):
         super().__init__(
             name=name,
             id=name,
-            parent_namespace=generic_class.parent_namespace,
+            parent_type_scope=generic_class.parent_type_scope,
         )
         self.generic_class = generic_class
         self.type_params = type_params
-        print(f"Found generic class specialization: {self.name}")
+        # print(f"Found generic class specialization: {self.name}")
 
     def is_dummy(self):
         return self.generic_class.is_dummy()
 
-    def is_emmitable(self) -> bool:
+    def is_emmittable(self) -> bool:
         return False
-
-    def get_forward_declaration(self) -> str:
-        template_args = ", ".join([f"typename {arg}" for arg in self.type_params])
-        return f"template<{template_args}> class {self.generic_class.name};"
 
 
 class ClassNodeContext:
@@ -157,7 +159,18 @@ class ClassNodeContext:
         self.using_strs = using_strs
 
 
-class CodeClass(CodeType):
+class CodeGenericParameter(CodeType):
+    def __init__(self, name: str, parent_class: CodeClass):
+        super().__init__(name, name, parent_class)
+
+    def is_dummy(self) -> bool:
+        return False
+
+    def is_emmittable(self) -> bool:
+        return False
+
+
+class CodeClass(CodeType, CodeTypeScope):
     @staticmethod
     def get_id(name: str, param_count: int) -> str:
         id = f"{name}`{param_count}" if param_count else name
@@ -171,28 +184,41 @@ class CodeClass(CodeType):
         parent_namespace: CodeNamespace,
     ):
         id = CodeClass.get_id(name, len(generic_parameter_names))
-        super().__init__(name, id, parent_namespace)
+        CodeType.__init__(self, name, id, parent_namespace)
+        CodeTypeScope.__init__(self)
+
         self.kind = kind
+        self.is_dummy_type = False
         self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
         self.fields: dict[str, CodeField] = {}
         self.methods: list[CodeMethod] = []
         self.usings: list[CodeNamespace] = []
-        self.generic_parameter_names: list[str] = generic_parameter_names
-        self.is_dummy_type = False
+        for gn in generic_parameter_names:
+            self.types_by_id[gn] = CodeGenericParameter(gn, self)
 
         self.contexts: list[ClassNodeContext] = []
 
     def is_dummy(self):
         return self.is_dummy_type
 
+    def get_template_declaration(self) -> str:
+        if len(self.types_by_id):
+            return f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>"
+        return ""
+
     def get_forward_declaration(self) -> str:
-        return f"class {self.name};"
+        template_decl = self.get_template_declaration()
+        if template_decl:
+            template_decl += " "
+        return f"{template_decl}class {self.name};"
 
     def get_header_contents(self) -> str:
+        assert isinstance(self.parent_type_scope, CodeNamespace)
+
         out = "#pragma once\n\n"
 
-        parent_ns: CodeNamespace | None = self.parent_namespace
+        parent_ns: CodeNamespace | None = self.parent_type_scope
         while parent_ns and parent_ns.name != "":
             out += f"#include <{parent_ns.get_header_path()}>\n"
             parent_ns = parent_ns.parent
@@ -202,14 +228,17 @@ class CodeClass(CodeType):
             out += f"#include <{using.get_header_path()}>\n"
         out += "\n"
 
-        ns_name = self.parent_namespace.get_full_path().replace(".", "::")
+        ns_name = self.parent_type_scope.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
 
         for using in self.usings:
             out += f"using namespace {using.get_full_path().replace('.','::')};\n"
         out += "\n"
 
-        out += f"class {self.name} {{\n"
+        template_decl = self.get_template_declaration()
+        if template_decl:
+            template_decl += "\n"
+        out += f"{template_decl}class {self.name} {{\n"
         out += "public:\n"
 
         for field in self.fields.values():
@@ -228,7 +257,7 @@ class CodeEnumEntry(CodeIdentifier):
 
 class CodeEnum(CodeType):
     def __init__(self, name: str, parent_namespace: CodeNamespace):
-        super().__init__(name=name, id=name, parent_namespace=parent_namespace)
+        super().__init__(name=name, id=name, parent_type_scope=parent_namespace)
         self.entries: list[CodeEnumEntry] = []
 
     def is_dummy(self):
@@ -238,8 +267,10 @@ class CodeEnum(CodeType):
         return f"enum class {self.name};"
 
     def get_header_contents(self) -> str:
+        assert isinstance(self.parent_type_scope, CodeNamespace)
+
         out = "#pragma once\n\n"
-        ns_name = self.parent_namespace.get_full_path().replace(".", "::")
+        ns_name = self.parent_type_scope.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
         out += f"enum class {self.name} {{\n"
 
@@ -252,12 +283,12 @@ class CodeEnum(CodeType):
         return out
 
 
-class CodeNamespace(CodeIdentifier):
+class CodeNamespace(CodeIdentifier, CodeTypeScope):
     def __init__(self, name: str, parent: CodeNamespace | None):
-        super().__init__(name)
+        CodeIdentifier.__init__(self, name)
+        CodeTypeScope.__init__(self)
         self.parent = parent
         self.subnamespaces: dict[str, CodeNamespace] = {}
-        self.types_by_id: dict[str, CodeType] = {}
 
         if parent:
             parent.subnamespaces[name] = self
@@ -305,12 +336,12 @@ class CodeNamespace(CodeIdentifier):
 
         out += f"namespace {ns_name} {{\n\n"
         for type in self.types_by_id.values():
-            if not type.is_dummy():
+            if type.is_emmittable():
                 out += f"{type.get_forward_declaration()}\n"
         out += f"\n}} // namespace {ns_name}\n\n"
 
         for type in self.types_by_id.values():
-            if not type.is_dummy():
+            if type.is_emmittable():
                 out += f"#include <{type.get_include_path()}>\n"
         out += "\n"
         return out
@@ -334,8 +365,16 @@ class Codebase:
         return ns
 
     def resolve_type(
-        self, type_id: str, usings: list[str], parent_namespace: CodeNamespace
+        self,
+        type_id: str,
+        usings: list[str],
+        parent_namespace: CodeNamespace,
+        parent_class: CodeClass | None,
     ) -> CodeType | None:
+        if parent_class and len(parent_class.types_by_id):
+            if type_id in parent_class.types_by_id:
+                return parent_class.types_by_id[type_id]
+
         namespaces: list[CodeNamespace] = []
 
         # Use parent namespace and all of its direct parents
@@ -511,6 +550,7 @@ def get_type_from_node(
     type_node: Node,
     using_strs: list[str],
     parent_namespace: CodeNamespace,
+    parent_class: CodeClass,
 ) -> CodeType:
     type: CodeType
     match type_node.grammar_name:
@@ -525,12 +565,14 @@ def get_type_from_node(
             generic_args: list[CodeType] = []
             for arg_node in type_arg_list_node.named_children:
                 generic_args.append(
-                    get_type_from_node(codebase, arg_node, using_strs, parent_namespace)
+                    get_type_from_node(
+                        codebase, arg_node, using_strs, parent_namespace, parent_class
+                    )
                 )
 
             generic_type_id = CodeClass.get_id(generic_type_name, len(generic_args))
             generic_type = codebase.resolve_type(
-                generic_type_id, using_strs, parent_namespace
+                generic_type_id, using_strs, parent_namespace, parent_class
             )
             assert generic_type
             assert isinstance(generic_type, CodeClass)
@@ -543,7 +585,9 @@ def get_type_from_node(
         ):
             assert type_node.text
             type_id = type_node.text.decode()
-            resolved_type = codebase.resolve_type(type_id, using_strs, parent_namespace)
+            resolved_type = codebase.resolve_type(
+                type_id, using_strs, parent_namespace, parent_class
+            )
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
                 resolved_type = DummyType(type_id, parent_namespace)
@@ -563,7 +607,7 @@ def create_class_field(
     declarator_node = declaration_node.named_children[1]
 
     field_type = get_type_from_node(
-        codebase, type_node, context.using_strs, context.parent_namespace
+        codebase, type_node, context.using_strs, context.parent_namespace, classlike
     )
 
     assert declarator_node.grammar_name == NodeKind.VARIABLE_DECLARATOR.value
