@@ -767,7 +767,6 @@ def populate_with_dummy(codebase: Codebase):
     make_dummy_class("bool", codebase.global_namespace)
     make_dummy_class("float", codebase.global_namespace)
     make_dummy_class("int", codebase.global_namespace)
-    make_dummy_class("int[]", codebase.global_namespace)
     make_dummy_class("string", codebase.global_namespace)
 
 

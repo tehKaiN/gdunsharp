@@ -26,6 +26,7 @@ Current level: **2**.
 - reading fields with generic types
 - reading fields with array types
 - reading fields with dict types
+- add parse error on tuples
 - reading method signatures
 - emitting method signatures in classes
 - emitting dummy method bodies in .cpp files
