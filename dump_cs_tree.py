@@ -11,6 +11,8 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
         "comment",
         "qualified_name",
         "integer_literal",
+        "predefined_type",
+        "array_rank_specifier",
     ]:
         node_text = node.text.decode() if node.text is not None else "[None]"
         print(f"{node.grammar_name}: '{node_text}'")
@@ -29,7 +31,7 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
 LANG_CSHARP = Language(tree_sitter_c_sharp.language())
 parser = Parser(LANG_CSHARP)
 
-file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\Team.cs").read().encode()
+file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\MapManager.cs").read().encode()
 tree = parser.parse(file_bytes)
 
 print_tree_node(tree.root_node)

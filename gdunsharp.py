@@ -545,6 +545,76 @@ def get_or_create_enum_from_node(node: Node, namespace: CodeNamespace) -> CodeEn
     return code_enum
 
 
+def get_generic_type_from_node(
+    codebase: Codebase,
+    type_node: Node,
+    using_strs: list[str],
+    parent_namespace: CodeNamespace,
+    parent_class: CodeClass,
+) -> CodeType:
+    generic_type_name_node = type_node.named_children[0]
+    assert generic_type_name_node.grammar_name == NodeKind.IDENTIFIER.value
+    assert generic_type_name_node.text
+    generic_type_name = generic_type_name_node.text.decode()
+
+    type_arg_list_node = type_node.named_children[1]
+    assert type_arg_list_node.grammar_name == NodeKind.TYPE_ARG_LIST.value
+    generic_args: list[CodeType] = []
+    for arg_node in type_arg_list_node.named_children:
+        generic_args.append(
+            get_type_from_node(
+                codebase, arg_node, using_strs, parent_namespace, parent_class
+            )
+        )
+
+    generic_type_id = CodeClass.get_id(generic_type_name, len(generic_args))
+    generic_type = codebase.resolve_type(
+        generic_type_id, using_strs, parent_namespace, parent_class
+    )
+    assert generic_type
+    assert isinstance(generic_type, CodeClass)
+    type = CodeClassSpecialized(generic_type, generic_args)
+    return type
+
+
+def get_array_type_from_node(
+    codebase: Codebase,
+    type_node: Node,
+    using_strs: list[str],
+    parent_namespace: CodeNamespace,
+    parent_class: CodeClass,
+) -> CodeType:
+    assert len(type_node.named_children) == 2
+    element_type_node = type_node.named_children[0]
+    element_type = get_type_from_node(
+        codebase,
+        element_type_node,
+        using_strs,
+        parent_namespace,
+        parent_class,
+    )
+
+    array_rank_node = type_node.named_children[1]
+    assert array_rank_node.text
+    assert array_rank_node.text.decode() == "[]", "Unsupported non-1D array"
+
+    generic_type_id = CodeClass.get_id("List", 1)
+    generic_type = codebase.resolve_type(
+        generic_type_id,
+        using_strs + ["System.Collections.Generic"],
+        parent_namespace,
+        parent_class,
+    )
+    assert generic_type
+    assert isinstance(generic_type, CodeClass)
+
+    type = CodeClassSpecialized(
+        generic_type,
+        [element_type],
+    )
+    return type
+
+
 def get_type_from_node(
     codebase: Codebase,
     type_node: Node,
@@ -555,34 +625,16 @@ def get_type_from_node(
     type: CodeType
     match type_node.grammar_name:
         case NodeKind.GENERIC_NAME.value:
-            generic_type_name_node = type_node.named_children[0]
-            assert generic_type_name_node.grammar_name == NodeKind.IDENTIFIER.value
-            assert generic_type_name_node.text
-            generic_type_name = generic_type_name_node.text.decode()
-
-            type_arg_list_node = type_node.named_children[1]
-            assert type_arg_list_node.grammar_name == NodeKind.TYPE_ARG_LIST.value
-            generic_args: list[CodeType] = []
-            for arg_node in type_arg_list_node.named_children:
-                generic_args.append(
-                    get_type_from_node(
-                        codebase, arg_node, using_strs, parent_namespace, parent_class
-                    )
-                )
-
-            generic_type_id = CodeClass.get_id(generic_type_name, len(generic_args))
-            generic_type = codebase.resolve_type(
-                generic_type_id, using_strs, parent_namespace, parent_class
+            type = get_generic_type_from_node(
+                codebase, type_node, using_strs, parent_namespace, parent_class
             )
-            assert generic_type
-            assert isinstance(generic_type, CodeClass)
-            type = CodeClassSpecialized(generic_type, generic_args)
 
-        case (
-            NodeKind.IDENTIFIER.value
-            | NodeKind.PREDEFINED_TYPE.value
-            | NodeKind.ARRAY_TYPE.value
-        ):
+        case NodeKind.ARRAY_TYPE.value:
+            type = get_array_type_from_node(
+                codebase, type_node, using_strs, parent_namespace, parent_class
+            )
+
+        case NodeKind.IDENTIFIER.value | NodeKind.PREDEFINED_TYPE.value:
             assert type_node.text
             type_id = type_node.text.decode()
             resolved_type = codebase.resolve_type(
