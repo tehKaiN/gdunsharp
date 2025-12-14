@@ -28,34 +28,38 @@ Current level: **2**.
 - reading fields with dict types
 - add parse error on tuples
 - reading method signatures
+- reading generic method signatures
 - emitting method signatures in classes
 - emitting dummy method bodies in .cpp files
 
 ## Level 4
 
 - reading properties
-- emitting virtual properties for interfaces
 - emitting properties for classes
 - emitting virtual methods for interfaces
 - preserving virtual/override in methods
+- emitting virtual properties for interfaces
 - translating c# arrays to c++ vectors
 - making sure stuff builds at all
 
 ## Level 5
 
-- reading method bodies
 - reading nested types in classes
 - resolving nested types in classes
 - emitting nested types
+- reading method bodies
 - reading signal signatures
 - emitting signal code
 
-## Uncategorized
+## Level 6 - usable
 
 - emitting method bodies
+- build as engine module
+- build as GDExtension
+
+## Future
+
+- `using Foo = Bar`
 - `async`/`await`
 - somehow support Newtonsoft.JSON
-- build as engine module
-- `using Foo = Bar`
 - reading scoped namespaces
-- build as GDExtension
