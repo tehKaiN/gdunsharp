@@ -338,10 +338,10 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         full_namespace = self.name
         parent = self.parent
         while parent:
-            assert isinstance(self.parent, CodeNamespace)
-            if not self.parent.name:
+            assert isinstance(parent, CodeNamespace)
+            if not parent.name:
                 break
-            full_namespace = f"{self.parent.name}.{full_namespace}"
+            full_namespace = f"{parent.name}.{full_namespace}"
             parent = parent.parent
         return full_namespace
 
@@ -349,10 +349,10 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         dir_path = camel_to_snake(self.name)
         parent = self.parent
         while parent:
-            assert isinstance(self.parent, CodeNamespace)
-            if not self.parent.name:
+            assert isinstance(parent, CodeNamespace)
+            if not parent.name:
                 break
-            dir_path = f"{camel_to_snake(self.parent.name)}/{dir_path}"
+            dir_path = f"{camel_to_snake(parent.name)}/{dir_path}"
             parent = parent.parent
         return dir_path
 
