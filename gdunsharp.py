@@ -657,7 +657,11 @@ def traverse_tree_level(
                 usings.append(get_using_from_node(child_node))
             case NodeKind.FILE_NAMESPACE.value:
                 namespace = get_or_create_namespace_from_node(child_node, codebase)
-            case NodeKind.CLASS_DECLARATION.value | NodeKind.IFACE_DECLARATION.value:
+            case (
+                NodeKind.CLASS_DECLARATION.value
+                | NodeKind.IFACE_DECLARATION.value
+                | NodeKind.STRUCT_DECLARATION.value
+            ):
                 get_or_create_class_from_node(child_node, namespace, usings)
             case NodeKind.ENUM_DECLARATION.value:
                 get_or_create_enum_from_node(child_node, namespace)
