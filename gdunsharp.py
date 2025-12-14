@@ -51,54 +51,6 @@ class CodeIdentifier:
         self.name = name
 
 
-class CodeParam(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType, default_value: str | None):
-        super().__init__(name)
-        self.type = type
-        self.default_value = default_value
-
-
-class CodeMethod(CodeIdentifier):
-    def __init__(
-        self,
-        name: str,
-        return_type: CodeType,
-        params: list[CodeParam],
-        is_extension: bool,
-        body_node: Node | None,
-    ):
-        super().__init__(name)
-        self.return_type = return_type
-        self.is_extension = is_extension
-        self.params = params
-        self.body_node = body_node
-
-
-class CodeField(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType):
-        super().__init__(name)
-        self.type = type
-
-    def get_declaration(self) -> str:
-        return f"{self.type.name} {self.name};"
-
-
-class CodeProperty(CodeIdentifier):
-    def __init__(
-        self, name: str, type: CodeClass, setter: CodeMethod, getter: CodeMethod
-    ):
-        super().__init__(name)
-        self.type = type
-        self.setter = setter
-        self.getter = getter
-
-
-class CodeClassKind(Enum):
-    CLASS = 1
-    STRUCT = 2
-    INTERFACE = 3
-
-
 class CodeType(CodeIdentifier):
     def __init__(self, name: str, id: str, parent_type_scope: CodeTypeScope):
         super().__init__(name, id)
@@ -127,6 +79,12 @@ class CodeType(CodeIdentifier):
         return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
 
 
+class CodeTypeScope:
+    def __init__(self: CodeTypeScope, parent: CodeTypeScope | None):
+        self.types_by_id: dict[str, CodeType] = {}
+        self.parent = parent
+
+
 class CodeNullableType(CodeType):
     def __init__(self, base_type):
         super().__init__(
@@ -150,9 +108,63 @@ class DummyType(CodeType):
         return True
 
 
-class CodeTypeScope:
-    def __init__(self: CodeTypeScope):
-        self.types_by_id: dict[str, CodeType] = {}
+class CodeParam(CodeIdentifier):
+    def __init__(self, name: str, type: CodeType, default_value: str | None):
+        super().__init__(name)
+        self.type = type
+        self.default_value = default_value
+
+
+class CodeMethod(CodeIdentifier, CodeTypeScope):
+    def __init__(
+        self,
+        name: str,
+        return_type: CodeType,
+        params: list[CodeParam],
+        generic_params: list[CodeGenericParameter],
+        is_extension: bool,
+        parent_class: CodeClass,
+        body_node: Node | None,
+    ):
+        id = name
+        if len(generic_params):
+            id += f"`{len(generic_params)}"
+
+        CodeIdentifier.__init__(self, name, id)
+        CodeTypeScope.__init__(self, parent_class)
+
+        self.return_type = return_type
+        self.is_extension = is_extension
+        self.params = params
+        self.body_node = body_node
+
+        for generic_param in generic_params:
+            self.types_by_id[generic_param.id] = generic_param
+
+
+class CodeField(CodeIdentifier):
+    def __init__(self, name: str, type: CodeType):
+        super().__init__(name)
+        self.type = type
+
+    def get_declaration(self) -> str:
+        return f"{self.type.name} {self.name};"
+
+
+class CodeProperty(CodeIdentifier):
+    def __init__(
+        self, name: str, type: CodeClass, setter: CodeMethod, getter: CodeMethod
+    ):
+        super().__init__(name)
+        self.type = type
+        self.setter = setter
+        self.getter = getter
+
+
+class CodeClassKind(Enum):
+    CLASS = 1
+    STRUCT = 2
+    INTERFACE = 3
 
 
 class CodeClassSpecialized(CodeType):
@@ -187,8 +199,8 @@ class ClassNodeContext:
 
 
 class CodeGenericParameter(CodeType):
-    def __init__(self, name: str, parent_class: CodeClass):
-        super().__init__(name, name, parent_class)
+    def __init__(self, name: str, parent_scope: CodeTypeScope):
+        super().__init__(name, name, parent_scope)
 
     def is_dummy(self) -> bool:
         return False
@@ -212,17 +224,17 @@ class CodeClass(CodeType, CodeTypeScope):
     ):
         id = CodeClass.get_id(name, len(generic_parameter_names))
         CodeType.__init__(self, name, id, parent_namespace)
-        CodeTypeScope.__init__(self)
+        CodeTypeScope.__init__(self, parent_namespace)
 
         self.kind = kind
         self.is_dummy_type = False
         self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
         self.fields: dict[str, CodeField] = {}
-        self.methods: list[CodeMethod] = []
+        self.methods: dict[str, CodeMethod] = {}
         self.usings: list[CodeNamespace] = []
         for gn in generic_parameter_names:
-            self.types_by_id[gn] = CodeGenericParameter(gn, self)
+            CodeGenericParameter(gn, self)
 
         self.contexts: list[ClassNodeContext] = []
 
@@ -245,8 +257,11 @@ class CodeClass(CodeType, CodeTypeScope):
 
         out = "#pragma once\n\n"
 
-        parent_ns: CodeNamespace | None = self.parent_type_scope
-        while parent_ns and parent_ns.name != "":
+        parent_ns: CodeTypeScope | None = self.parent_type_scope
+        while parent_ns:
+            assert isinstance(parent_ns, CodeNamespace)
+            if not parent_ns.name:
+                break
             out += f"#include <{parent_ns.get_header_path()}>\n"
             parent_ns = parent_ns.parent
         out += "\n"
@@ -313,8 +328,7 @@ class CodeEnum(CodeType):
 class CodeNamespace(CodeIdentifier, CodeTypeScope):
     def __init__(self, name: str, parent: CodeNamespace | None):
         CodeIdentifier.__init__(self, name)
-        CodeTypeScope.__init__(self)
-        self.parent = parent
+        CodeTypeScope.__init__(self, parent)
         self.subnamespaces: dict[str, CodeNamespace] = {}
 
         if parent:
@@ -323,16 +337,22 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
     def get_full_path(self) -> str:
         full_namespace = self.name
         parent = self.parent
-        while parent and parent.name:
-            full_namespace = f"{parent.name}.{full_namespace}"
+        while parent:
+            assert isinstance(self.parent, CodeNamespace)
+            if not self.parent.name:
+                break
+            full_namespace = f"{self.parent.name}.{full_namespace}"
             parent = parent.parent
         return full_namespace
 
     def get_directory_path(self) -> str:
         dir_path = camel_to_snake(self.name)
         parent = self.parent
-        while parent and parent.name:
-            dir_path = f"{camel_to_snake(parent.name)}/{dir_path}"
+        while parent:
+            assert isinstance(self.parent, CodeNamespace)
+            if not self.parent.name:
+                break
+            dir_path = f"{camel_to_snake(self.parent.name)}/{dir_path}"
             parent = parent.parent
         return dir_path
 
@@ -395,11 +415,12 @@ class Codebase:
         self,
         type_id: str,
         namespaces: list[CodeNamespace],
-        parent_class: CodeClass | None,
+        parent_scope: CodeTypeScope | None,
     ) -> CodeType | None:
-        if parent_class and len(parent_class.types_by_id):
-            if type_id in parent_class.types_by_id:
-                return parent_class.types_by_id[type_id]
+        while parent_scope and len(parent_scope.types_by_id):
+            if type_id in parent_scope.types_by_id:
+                return parent_scope.types_by_id[type_id]
+            parent_scope = parent_scope.parent
 
         for namespace in namespaces:
             if type_id in namespace.types_by_id:
@@ -563,7 +584,7 @@ def get_generic_type_from_node(
     codebase: Codebase,
     type_node: Node,
     namespaces: list[CodeNamespace],
-    parent_class: CodeClass,
+    parent_scope: CodeTypeScope,
 ) -> CodeType:
     generic_type_name_node = type_node.named_children[0]
     assert generic_type_name_node.grammar_name == NodeKind.IDENTIFIER.value
@@ -575,11 +596,11 @@ def get_generic_type_from_node(
     generic_args: list[CodeType] = []
     for arg_node in type_arg_list_node.named_children:
         generic_args.append(
-            get_type_from_node(codebase, arg_node, namespaces, parent_class)
+            get_type_from_node(codebase, arg_node, namespaces, parent_scope)
         )
 
     generic_type_id = CodeClass.get_id(generic_type_name, len(generic_args))
-    generic_type = codebase.resolve_type(generic_type_id, namespaces, parent_class)
+    generic_type = codebase.resolve_type(generic_type_id, namespaces, parent_scope)
     assert generic_type
     assert isinstance(generic_type, CodeClass)
     type = CodeClassSpecialized(generic_type, generic_args)
@@ -590,7 +611,7 @@ def get_array_type_from_node(
     codebase: Codebase,
     type_node: Node,
     namespaces: list[CodeNamespace],
-    parent_class: CodeClass,
+    parent_scope: CodeTypeScope,
 ) -> CodeType:
     assert len(type_node.named_children) == 2
     element_type_node = type_node.named_children[0]
@@ -598,7 +619,7 @@ def get_array_type_from_node(
         codebase,
         element_type_node,
         namespaces,
-        parent_class,
+        parent_scope,
     )
 
     array_rank_node = type_node.named_children[1]
@@ -609,7 +630,7 @@ def get_array_type_from_node(
     generic_type = codebase.resolve_type(
         generic_type_id,
         namespaces + [codebase.get_namespace("System.Collections.Generic")],
-        parent_class,
+        parent_scope,
     )
     assert generic_type
     assert isinstance(generic_type, CodeClass)
@@ -625,7 +646,7 @@ def get_type_from_node(
     codebase: Codebase,
     type_node: Node,
     namespaces: list[CodeNamespace],
-    parent_class: CodeClass,
+    parent_scope: CodeTypeScope,
 ) -> CodeType:
     type: CodeType
     match type_node.grammar_name:
@@ -634,21 +655,21 @@ def get_type_from_node(
 
         case NodeKind.GENERIC_NAME.value:
             type = get_generic_type_from_node(
-                codebase, type_node, namespaces, parent_class
+                codebase, type_node, namespaces, parent_scope
             )
 
         case NodeKind.ARRAY_TYPE.value:
             type = get_array_type_from_node(
-                codebase, type_node, namespaces, parent_class
+                codebase, type_node, namespaces, parent_scope
             )
 
         case NodeKind.IDENTIFIER.value | NodeKind.PREDEFINED_TYPE.value:
             assert type_node.text
             type_id = type_node.text.decode()
-            resolved_type = codebase.resolve_type(type_id, namespaces, parent_class)
+            resolved_type = codebase.resolve_type(type_id, namespaces, parent_scope)
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
-                resolved_type = DummyType(type_id, parent_class.parent_type_scope)
+                resolved_type = DummyType(type_id, parent_scope)
             type = resolved_type
 
         case NodeKind.NULLABLE_TYPE.value:
@@ -656,7 +677,7 @@ def get_type_from_node(
             assert type_node.named_child_count == 1
             child_node = type_node.named_children[0]
             base_type = get_type_from_node(
-                codebase, child_node, namespaces, parent_class
+                codebase, child_node, namespaces, parent_scope
             )
             type = CodeNullableType(base_type)
 
@@ -695,37 +716,44 @@ def create_class_method(
     return_type_node: Node | None = None
     body_node: Node | None = None
     name_node: Node | None = None
-
+    generic_param_names: list[str] = []
     for child_node in node.named_children:
-        if child_node.grammar_name == NodeKind.TUPLE_TYPE.value:
-            raise Exception("Tuple types aren't supported")
-        if child_node.grammar_name in [
-            NodeKind.PREDEFINED_TYPE.value,
-            NodeKind.ARRAY_TYPE.value,
-            NodeKind.GENERIC_NAME.value,
-            NodeKind.NULLABLE_TYPE.value,
-        ]:
-            return_type_node = child_node
-        elif child_node.grammar_name == NodeKind.IDENTIFIER.value:
-            if not return_type_node:
-                # identifier is a custom type
+        match child_node.grammar_name:
+            case NodeKind.TUPLE_TYPE.value:
+                raise Exception("Tuple types aren't supported")
+            case (
+                NodeKind.PREDEFINED_TYPE.value
+                | NodeKind.ARRAY_TYPE.value
+                | NodeKind.GENERIC_NAME.value
+                | NodeKind.NULLABLE_TYPE.value
+            ):
                 return_type_node = child_node
-            else:
-                name_node = child_node
-        elif child_node.grammar_name == NodeKind.PARAM_LIST.value:
-            params_node = child_node
-        elif child_node.grammar_name == NodeKind.BLOCK.value:
-            body_node = child_node
+            case NodeKind.IDENTIFIER.value:
+                if not return_type_node:
+                    # identifier is a custom type
+                    return_type_node = child_node
+                else:
+                    name_node = child_node
+            case NodeKind.PARAM_LIST.value:
+                params_node = child_node
+            case NodeKind.BLOCK.value:
+                body_node = child_node
+            case NodeKind.TYPE_PARAM_LIST.value:
+                generic_param_names = get_type_parameter_names_from_node(child_node)
 
     assert name_node
     assert return_type_node
     assert params_node
 
+    generic_method_scope = CodeTypeScope(parent_class)
+    for generic_name in generic_param_names:
+        CodeGenericParameter(generic_name, generic_method_scope)
+
     assert name_node.text
     method_name = name_node.text.decode()
 
     return_type = get_type_from_node(
-        codebase, return_type_node, namespaces, parent_class
+        codebase, return_type_node, namespaces, generic_method_scope
     )
 
     params: list[CodeParam] = []
@@ -750,7 +778,7 @@ def create_class_method(
                     param_name_node = param_child_node
         assert param_type_node
         param_type = get_type_from_node(
-            codebase, param_type_node, namespaces, parent_class
+            codebase, param_type_node, namespaces, generic_method_scope
         )
 
         assert param_name_node
@@ -759,9 +787,22 @@ def create_class_method(
         param = CodeParam(param_name, param_type, default_value=None)
         params.append(param)
 
+    generic_params: list[CodeGenericParameter] = []
+    for generic_param in generic_method_scope.types_by_id.values():
+        # TODO: replace if with assert after adding nested class support
+        if isinstance(generic_param, CodeGenericParameter):
+            generic_params.append(generic_param)
+
     method = CodeMethod(
-        method_name, return_type, params, is_extension=False, body_node=body_node
+        method_name,
+        return_type,
+        params,
+        generic_params,
+        is_extension=False,
+        parent_class=parent_class,
+        body_node=body_node,
     )
+    parent_class.methods[method.id] = method
     # print(f"Found method {parent_class.name}::{method.name}()")
     return method
 
@@ -804,6 +845,7 @@ def gather_class_elements(codebase: Codebase):
             ns: CodeNamespace | None = context.parent_namespace
             while ns and ns != codebase.global_namespace:
                 namespaces.append(ns)
+                assert ns.parent is None or isinstance(ns.parent, CodeNamespace)
                 ns = ns.parent
 
             # After that's exhausted, use specific namespaces from `using`s
