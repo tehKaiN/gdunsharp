@@ -19,9 +19,11 @@ The project exploits following assumptions:
   - Runtime reflection isn't used
   - No pure C# events, just Godot signals
 - C# code compiles, thus:
-  - access modifiers can be ignored and everything can be `public`
-  - `readonly` modified can be ignored
+  - Access modifiers can be ignored and everything can be `public`
+  - `readonly`, `sealed`, as well as class' `static` modifiers can be ignored
   - `out`/`ref` can be unified into single flavor of pass-by-reference
+- Code should be human-readable, but doesn't need to be optimal:
+  - Everything is emitted in .hpp files
 
 The code translation works as follows:
 

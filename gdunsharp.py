@@ -149,6 +149,16 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])});"
         return out
 
+    def get_definition(self) -> str:
+        out = ""
+        if len(self.types_by_id):
+            out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
+
+        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
+
+        out += f"}}"
+        return out
+
 
 class CodeField(CodeIdentifier):
     def __init__(self, name: str, type: CodeType):
@@ -239,7 +249,7 @@ class CodeClass(CodeType, CodeTypeScope):
         self.ancestors: list[CodeClass] = []
         self.properties: list[CodeProperty] = []
         self.fields: dict[str, CodeField] = {}
-        self.methods: dict[str, CodeMethod] = {}
+        self.methods_by_id: dict[str, CodeMethod] = {}
         self.usings: list[CodeNamespace] = []
         for gn in generic_parameter_names:
             CodeGenericParameter(gn, self)
@@ -300,10 +310,15 @@ class CodeClass(CodeType, CodeTypeScope):
             out += f"\t{field.get_declaration()}\n"
         out += "\n"
 
-        for method in self.methods.values():
+        for method in self.methods_by_id.values():
             declaration_lines = method.get_declaration().splitlines()
             out += "".join([f"\t{ln}\n" for ln in declaration_lines])
         out += "\n"
+
+        for method in self.methods_by_id.values():
+            definition_lines = method.get_definition().splitlines()
+            out += "".join([f"\t{ln}\n" for ln in definition_lines])
+            out += "\n"
 
         out += f"}};\n\n"
         out += f"}} // namespace {ns_name}\n"
@@ -397,9 +412,9 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
             type.emit_cpp(f"{path}")
 
     def get_namespace_header(self) -> str:
-        ns_name = self.get_full_path().replace(".", "::")
         out = "#pragma once\n\n"
 
+        ns_name = self.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
         for type in self.types_by_id.values():
             if type.is_emmittable():
@@ -821,7 +836,7 @@ def create_class_method(
         parent_class=parent_class,
         body_node=body_node,
     )
-    parent_class.methods[method.id] = method
+    parent_class.methods_by_id[method.id] = method
     # print(f"Found method {parent_class.name}::{method.name}()")
     return method
 
