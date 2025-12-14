@@ -30,6 +30,8 @@ class NodeKind(Enum):
     FIELD_DECLARATION = "field_declaration"
     USING_DIRECTIVE = "using_directive"
     PREDEFINED_TYPE = "predefined_type"
+    NULLABLE_TYPE = "nullable_type"
+    TUPLE_TYPE = "tuple_type"
     GENERIC_NAME = "generic_name"
     ARRAY_TYPE = "array_type"
     VARIABLE_DECLARATION = "variable_declaration"
@@ -113,6 +115,21 @@ class CodeType(CodeIdentifier):
     def get_include_path(self) -> str:
         assert isinstance(self.parent_type_scope, CodeNamespace)
         return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
+
+
+class CodeNullableType(CodeType):
+    def __init__(self, base_type):
+        super().__init__(
+            base_type.name + "?", base_type.id + "?", base_type.parent_type_scope
+        )
+        self.base_type = base_type
+        # print(f"Found nullable type {self.name}")
+
+    def is_dummy(self) -> bool:
+        return False
+
+    def is_emmittable(self) -> bool:
+        return False
 
 
 class DummyType(CodeType):
@@ -602,6 +619,9 @@ def get_type_from_node(
 ) -> CodeType:
     type: CodeType
     match type_node.grammar_name:
+        case NodeKind.TUPLE_TYPE.value:
+            raise Exception("Tuple types aren't supported")
+
         case NodeKind.GENERIC_NAME.value:
             type = get_generic_type_from_node(
                 codebase, type_node, namespaces, parent_class
@@ -620,6 +640,15 @@ def get_type_from_node(
                 # TODO: replace with assert after implementing nested class
                 resolved_type = DummyType(type_id, parent_class.parent_type_scope)
             type = resolved_type
+
+        case NodeKind.NULLABLE_TYPE.value:
+            assert type_node.text
+            assert type_node.named_child_count == 1
+            child_node = type_node.named_children[0]
+            base_type = get_type_from_node(
+                codebase, child_node, namespaces, parent_class
+            )
+            type = CodeNullableType(base_type)
 
     return type
 
