@@ -141,6 +141,14 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         for generic_param in generic_params:
             self.types_by_id[generic_param.id] = generic_param
 
+    def get_declaration(self) -> str:
+        out = ""
+        if len(self.types_by_id):
+            out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
+
+        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])});"
+        return out
+
 
 class CodeField(CodeIdentifier):
     def __init__(self, name: str, type: CodeType):
@@ -290,6 +298,12 @@ class CodeClass(CodeType, CodeTypeScope):
 
         for field in self.fields.values():
             out += f"\t{field.get_declaration()}\n"
+        out += "\n"
+
+        for method in self.methods.values():
+            declaration_lines = method.get_declaration().splitlines()
+            out += "".join([f"\t{ln}\n" for ln in declaration_lines])
+        out += "\n"
 
         out += f"}};\n\n"
         out += f"}} // namespace {ns_name}\n"

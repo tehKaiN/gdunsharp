@@ -29,7 +29,7 @@ Current level: **2**.
 - add parse error on tuples
 - reading method signatures
 - reading generic method signatures
-- emitting method signatures in classes
+- emitting method signatures in class definitions
 - emitting dummy method bodies in .cpp files
 
 ## Level 4
