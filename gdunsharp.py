@@ -242,8 +242,13 @@ class CodeClass(CodeType, CodeTypeScope):
         return self.is_dummy_type
 
     def get_template_declaration(self) -> str:
-        if len(self.types_by_id):
-            return f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>"
+        generic_params = [
+            t for t in self.types_by_id.values() if isinstance(t, CodeGenericParameter)
+        ]
+        if len(generic_params):
+            return (
+                f"template<{', '.join(f'typename {t.name}' for t in generic_params)}>"
+            )
         return ""
 
     def get_forward_declaration(self) -> str:
