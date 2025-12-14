@@ -703,7 +703,7 @@ def gather_namespace_and_types(trees_by_path: dict[str, Tree], codebase: Codebas
         traverse_tree_level(tree.root_node, codebase, namespace, [])
 
 
-def gather_class_fields_and_usings(codebase: Codebase):
+def gather_class_elements(codebase: Codebase):
     classlikes = [t for t in codebase.get_all_types() if isinstance(t, CodeClass)]
     print(f"Got {len(classlikes)} class-likes")
     for classlike in classlikes:
@@ -726,6 +726,12 @@ def gather_class_fields_and_usings(codebase: Codebase):
                     case NodeKind.FIELD_DECLARATION.value:
                         create_class_field(classlike, declaration_node, namespaces)
 
+
+def consolidate_class_usings(codebase: Codebase):
+    classlikes = [t for t in codebase.get_all_types() if isinstance(t, CodeClass)]
+    print(f"Got {len(classlikes)} class-likes")
+    for classlike in classlikes:
+        for context in classlike.contexts:
             for using in context.using_strs:
                 ns = codebase.get_namespace(using)
                 if ns not in classlike.usings:
@@ -813,7 +819,8 @@ print("Gathering namespaces and types...")
 codebase = Codebase()
 populate_with_dummy(codebase)
 gather_namespace_and_types(trees, codebase)
-gather_class_fields_and_usings(codebase)
+gather_class_elements(codebase)
+consolidate_class_usings(codebase)
 
 # Step 3: emit cpp code based on the code database
 prepare_out_directory(out_path)
