@@ -28,6 +28,7 @@ class NodeKind(Enum):
     INT_LITERAL = "integer_literal"
     DECLARATION_LIST = "declaration_list"
     FIELD_DECLARATION = "field_declaration"
+    METHOD_DECLARATION = "method_declaration"
     USING_DIRECTIVE = "using_directive"
     PREDEFINED_TYPE = "predefined_type"
     NULLABLE_TYPE = "nullable_type"
@@ -39,6 +40,9 @@ class NodeKind(Enum):
     TYPE_ARG_LIST = "type_argument_list"
     TYPE_PARAM_LIST = "type_parameter_list"
     TYPE_PARAM = "type_parameter"
+    PARAM_LIST = "parameter_list"
+    PARAM = "parameter"
+    BLOCK = "block"
 
 
 class CodeIdentifier:
@@ -48,19 +52,25 @@ class CodeIdentifier:
 
 
 class CodeParam(CodeIdentifier):
-    def __init__(self, name: str, type: CodeClass, default_value: str):
+    def __init__(self, name: str, type: CodeType, default_value: str | None):
         super().__init__(name)
         self.type = type
         self.default_value = default_value
 
 
 class CodeMethod(CodeIdentifier):
-    def __init__(self, name: str, type: CodeClass, is_extension: bool, body_node: Node):
+    def __init__(
+        self,
+        name: str,
+        return_type: CodeType,
+        params: list[CodeParam],
+        is_extension: bool,
+        body_node: Node | None,
+    ):
         super().__init__(name)
-        self.type = type
+        self.return_type = return_type
         self.is_extension = is_extension
-        self.generic_params: list[CodeClass] = []
-        self.params: list[CodeParam] = []
+        self.params = params
         self.body_node = body_node
 
 
@@ -677,6 +687,85 @@ def create_class_field(
     return field
 
 
+def create_class_method(
+    parent_class: CodeClass,
+    node: Node,
+    namespaces: list[CodeNamespace],
+) -> CodeMethod:
+    return_type_node: Node | None = None
+    body_node: Node | None = None
+    name_node: Node | None = None
+
+    for child_node in node.named_children:
+        if child_node.grammar_name == NodeKind.TUPLE_TYPE.value:
+            raise Exception("Tuple types aren't supported")
+        if child_node.grammar_name in [
+            NodeKind.PREDEFINED_TYPE.value,
+            NodeKind.ARRAY_TYPE.value,
+            NodeKind.GENERIC_NAME.value,
+            NodeKind.NULLABLE_TYPE.value,
+        ]:
+            return_type_node = child_node
+        elif child_node.grammar_name == NodeKind.IDENTIFIER.value:
+            if not return_type_node:
+                # identifier is a custom type
+                return_type_node = child_node
+            else:
+                name_node = child_node
+        elif child_node.grammar_name == NodeKind.PARAM_LIST.value:
+            params_node = child_node
+        elif child_node.grammar_name == NodeKind.BLOCK.value:
+            body_node = child_node
+
+    assert name_node
+    assert return_type_node
+    assert params_node
+
+    assert name_node.text
+    method_name = name_node.text.decode()
+
+    return_type = get_type_from_node(
+        codebase, return_type_node, namespaces, parent_class
+    )
+
+    params: list[CodeParam] = []
+    for param_node in params_node.named_children:
+        assert param_node.grammar_name == NodeKind.PARAM.value
+        param_type_node: Node | None = None
+        param_name_node: Node | None = None
+        for param_child_node in param_node.named_children:
+            if param_child_node.grammar_name == NodeKind.TUPLE_TYPE.value:
+                raise Exception("Tuple types aren't supported")
+            if param_child_node.grammar_name in [
+                NodeKind.PREDEFINED_TYPE.value,
+                NodeKind.ARRAY_TYPE.value,
+                NodeKind.GENERIC_NAME.value,
+            ]:
+                param_type_node = param_child_node
+            elif param_child_node.grammar_name == NodeKind.IDENTIFIER.value:
+                if not param_type_node:
+                    # identifier is a custom type
+                    param_type_node = param_child_node
+                else:
+                    param_name_node = param_child_node
+        assert param_type_node
+        param_type = get_type_from_node(
+            codebase, param_type_node, namespaces, parent_class
+        )
+
+        assert param_name_node
+        assert param_name_node.text
+        param_name = param_name_node.text.decode()
+        param = CodeParam(param_name, param_type, default_value=None)
+        params.append(param)
+
+    method = CodeMethod(
+        method_name, return_type, params, is_extension=False, body_node=body_node
+    )
+    # print(f"Found method {parent_class.name}::{method.name}()")
+    return method
+
+
 def traverse_tree_level(
     parent_node: Node, codebase: Codebase, namespace: CodeNamespace, usings: list[str]
 ):
@@ -725,6 +814,8 @@ def gather_class_elements(codebase: Codebase):
                 match declaration_node.grammar_name:
                     case NodeKind.FIELD_DECLARATION.value:
                         create_class_field(classlike, declaration_node, namespaces)
+                    case NodeKind.METHOD_DECLARATION.value:
+                        create_class_method(classlike, declaration_node, namespaces)
 
 
 def consolidate_class_usings(codebase: Codebase):
@@ -799,14 +890,17 @@ def populate_with_dummy(codebase: Codebase):
     make_dummy_class("Texture2D", ns_godot)
     make_dummy_class("Timer", ns_godot)
     make_dummy_class("VBoxContainer", ns_godot)
+    make_dummy_class("Vector2", ns_godot)
     make_dummy_class("Vector3", ns_godot)
 
     make_dummy_class("Regex", ns_system_text_regularexpressions)
 
     make_dummy_class("bool", codebase.global_namespace)
     make_dummy_class("float", codebase.global_namespace)
+    make_dummy_class("double", codebase.global_namespace)
     make_dummy_class("int", codebase.global_namespace)
     make_dummy_class("string", codebase.global_namespace)
+    make_dummy_class("void", codebase.global_namespace)
 
 
 print("Parsing C# files...")
