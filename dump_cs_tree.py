@@ -13,7 +13,10 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
         "integer_literal",
         "predefined_type",
         "array_rank_specifier",
-    ]:
+    ] or (
+        node.grammar_name == "accessor_declaration"
+        and node.named_children[0].grammar_name != "block"
+    ):
         node_text = node.text.decode() if node.text is not None else "[None]"
         print(f"{node.grammar_name}: '{node_text}'")
     else:

@@ -29,6 +29,7 @@ class NodeKind(Enum):
     DECLARATION_LIST = "declaration_list"
     FIELD_DECLARATION = "field_declaration"
     METHOD_DECLARATION = "method_declaration"
+    PROPERTY_DECLARATION = "property_declaration"
     USING_DIRECTIVE = "using_directive"
     PREDEFINED_TYPE = "predefined_type"
     NULLABLE_TYPE = "nullable_type"
@@ -43,6 +44,9 @@ class NodeKind(Enum):
     PARAM_LIST = "parameter_list"
     PARAM = "parameter"
     BLOCK = "block"
+    ACCESSOR_LIST = "accessor_list"
+    ACCESSOR_DECLARATION = "accessor_declaration"
+    ARROW_EXPRESSION = "arrow_expression_clause"
 
 
 class CodeIdentifier:
@@ -171,7 +175,11 @@ class CodeField(CodeIdentifier):
 
 class CodeProperty(CodeIdentifier):
     def __init__(
-        self, name: str, type: CodeClass, setter: CodeMethod, getter: CodeMethod
+        self,
+        name: str,
+        type: CodeType,
+        getter: CodeMethod | None,
+        setter: CodeMethod | None,
     ):
         super().__init__(name)
         self.type = type
@@ -247,8 +255,8 @@ class CodeClass(CodeType, CodeTypeScope):
         self.kind = kind
         self.is_dummy_type = False
         self.ancestors: list[CodeClass] = []
-        self.properties: list[CodeProperty] = []
-        self.fields: dict[str, CodeField] = {}
+        self.properties_by_id: dict[str, CodeProperty] = {}
+        self.fields_by_id: dict[str, CodeField] = {}
         self.methods_by_id: dict[str, CodeMethod] = {}
         self.usings: list[CodeNamespace] = []
         for gn in generic_parameter_names:
@@ -306,7 +314,7 @@ class CodeClass(CodeType, CodeTypeScope):
         out += f"{template_decl}class {self.name} {{\n"
         out += "public:\n"
 
-        for field in self.fields.values():
+        for field in self.fields_by_id.values():
             out += f"\t{field.get_declaration()}\n"
         out += "\n"
 
@@ -737,9 +745,103 @@ def create_class_field(
     assert name_node.text
     field_name = name_node.text.decode()
     field = CodeField(field_name, field_type)
-    classlike.fields[field.name] = field
+    classlike.fields_by_id[field.name] = field
     # print(f"Added field {classlike.name}.{field.name} of type {field_type.name}")
     return field
+
+
+def create_class_property(
+    parent_class: CodeClass, node: Node, namespaces: list[CodeNamespace]
+):
+    type_node: Node | None = None
+    name_node: Node | None = None
+    getter_body: Node | None = None
+    setter_body: Node | None = None
+    for child_node in node.named_children:
+        match child_node.grammar_name:
+            case NodeKind.TUPLE_TYPE.value:
+                raise Exception("Tuple types aren't supported")
+            case (
+                NodeKind.PREDEFINED_TYPE.value
+                | NodeKind.ARRAY_TYPE.value
+                | NodeKind.GENERIC_NAME.value
+                | NodeKind.NULLABLE_TYPE.value
+            ):
+                type_node = child_node
+            case NodeKind.IDENTIFIER.value:
+                if not type_node:
+                    # identifier is a custom type
+                    type_node = child_node
+                else:
+                    name_node = child_node
+            case NodeKind.ARROW_EXPRESSION.value:
+                getter_body = child_node
+            case NodeKind.ACCESSOR_LIST.value:
+                for accessor_declaration_node in child_node.named_children:
+                    assert (
+                        accessor_declaration_node.grammar_name
+                        == NodeKind.ACCESSOR_DECLARATION.value
+                    )
+                    # FIXME: change this code when get/set becomes a named child
+                    if len(accessor_declaration_node.named_children):
+                        for accessor_node in accessor_declaration_node.children:
+                            if accessor_node.grammar_name == "get":
+                                getter_body = find_node_by_grammar_name(
+                                    accessor_declaration_node,
+                                    NodeKind.ARROW_EXPRESSION.value,
+                                ) or find_node_by_grammar_name(
+                                    accessor_declaration_node, NodeKind.BLOCK.value
+                                )
+                            elif accessor_node.grammar_name == "set":
+                                setter_body = find_node_by_grammar_name(
+                                    accessor_declaration_node,
+                                    NodeKind.ARROW_EXPRESSION.value,
+                                ) or find_node_by_grammar_name(
+                                    accessor_declaration_node, NodeKind.BLOCK.value
+                                )
+
+    assert name_node
+    assert name_node.text
+    assert type_node
+    property_name = name_node.text.decode()
+    property_type = get_type_from_node(codebase, type_node, namespaces, parent_class)
+
+    if getter_body:
+        getter = CodeMethod(
+            f"get_{property_name}",
+            property_type,
+            params=[],
+            generic_params=[],
+            is_extension=False,
+            parent_class=parent_class,
+            body_node=getter_body,
+        )
+        parent_class.methods_by_id[getter.id] = getter
+    else:
+        getter = None
+
+    if setter_body:
+        void_type = codebase.resolve_type("void", namespaces, parent_class)
+        assert void_type
+        setter = CodeMethod(
+            f"set_{property_name}",
+            void_type,
+            params=[CodeParam("value", property_type, None)],
+            generic_params=[],
+            is_extension=False,
+            parent_class=parent_class,
+            body_node=setter_body,
+        )
+        parent_class.methods_by_id[setter.id] = setter
+    else:
+        setter = None
+
+    if getter or setter:
+        property = CodeProperty(property_name, property_type, setter, getter)
+        parent_class.properties_by_id[property.id] = property
+    else:
+        property_field = CodeField(property_name, property_type)
+        parent_class.fields_by_id[property_field.id] = property_field
 
 
 def create_class_method(
@@ -892,6 +994,8 @@ def gather_class_elements(codebase: Codebase):
                         create_class_field(classlike, declaration_node, namespaces)
                     case NodeKind.METHOD_DECLARATION.value:
                         create_class_method(classlike, declaration_node, namespaces)
+                    case NodeKind.PROPERTY_DECLARATION.value:
+                        create_class_property(classlike, declaration_node, namespaces)
 
 
 def consolidate_class_usings(codebase: Codebase):
@@ -938,6 +1042,10 @@ def populate_with_dummy(codebase: Codebase):
 
     make_dummy_generic("HashSet", ["TElement"], ns_system_collections_generic)
     make_dummy_generic("List", ["TElement"], ns_system_collections_generic)
+    make_dummy_generic("IReadOnlyList", ["TElement"], ns_system_collections_generic)
+    make_dummy_generic(
+        "IReadOnlyDictionary", ["TKey", "TValue"], ns_system_collections_generic
+    )
     make_dummy_generic(
         "Dictionary",
         ["TKey", "TValue"],
