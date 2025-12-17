@@ -119,6 +119,17 @@ class CodeParam(CodeIdentifier):
         self.default_value = default_value
 
 
+class CodeAccessorKind(Enum):
+    GET = 0
+    SET = 1
+
+
+class CodeAutoAccessorMethod:
+    def __init__(self, kind: CodeAccessorKind, field: CodeField):
+        self.kind = kind
+        self.field = field
+
+
 class CodeMethod(CodeIdentifier, CodeTypeScope):
     def __init__(
         self,
@@ -128,7 +139,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         generic_params: list[CodeGenericParameter],
         is_extension: bool,
         parent_class: CodeClass,
-        body_node: Node | None,
+        body_source: Node | CodeAutoAccessorMethod | None,
     ):
         id = name
         if len(generic_params):
@@ -140,7 +151,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         self.return_type = return_type
         self.is_extension = is_extension
         self.params = params
-        self.body_node = body_node
+        self.body_source = body_source
 
         for generic_param in generic_params:
             self.types_by_id[generic_param.id] = generic_param
@@ -160,7 +171,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
 
         out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
 
-        out += f"}}"
+            out += f"}}"
         return out
 
 
@@ -323,12 +334,13 @@ class CodeClass(CodeType, CodeTypeScope):
             out += "".join([f"\t{ln}\n" for ln in declaration_lines])
         out += "\n"
 
+        out += f"}};\n\n"
+
         for method in self.methods_by_id.values():
             definition_lines = method.get_definition().splitlines()
-            out += "".join([f"\t{ln}\n" for ln in definition_lines])
+            out += "".join([f"{ln}\n" for ln in definition_lines])
             out += "\n"
 
-        out += f"}};\n\n"
         out += f"}} // namespace {ns_name}\n"
         return out
 
@@ -752,11 +764,11 @@ def create_class_field(
 
 def create_class_property(
     parent_class: CodeClass, node: Node, namespaces: list[CodeNamespace]
-):
+) -> CodeProperty:
     type_node: Node | None = None
     name_node: Node | None = None
-    getter_body: Node | None = None
-    setter_body: Node | None = None
+    getter_body: Node | CodeAutoAccessorMethod | None = None
+    setter_body: Node | CodeAutoAccessorMethod | None = None
     for child_node in node.named_children:
         match child_node.grammar_name:
             case NodeKind.TUPLE_TYPE.value:
@@ -806,42 +818,38 @@ def create_class_property(
     property_name = name_node.text.decode()
     property_type = get_type_from_node(codebase, type_node, namespaces, parent_class)
 
-    if getter_body:
-        getter = CodeMethod(
-            f"get_{property_name}",
-            property_type,
-            params=[],
-            generic_params=[],
-            is_extension=False,
-            parent_class=parent_class,
-            body_node=getter_body,
-        )
-        parent_class.methods_by_id[getter.id] = getter
-    else:
-        getter = None
-
-    if setter_body:
-        void_type = codebase.resolve_type("void", namespaces, parent_class)
-        assert void_type
-        setter = CodeMethod(
-            f"set_{property_name}",
-            void_type,
-            params=[CodeParam("value", property_type, None)],
-            generic_params=[],
-            is_extension=False,
-            parent_class=parent_class,
-            body_node=setter_body,
-        )
-        parent_class.methods_by_id[setter.id] = setter
-    else:
-        setter = None
-
-    if getter or setter:
-        property = CodeProperty(property_name, property_type, setter, getter)
-        parent_class.properties_by_id[property.id] = property
-    else:
+    if not getter_body and not setter_body:
         property_field = CodeField(property_name, property_type)
         parent_class.fields_by_id[property_field.id] = property_field
+        getter_body = CodeAutoAccessorMethod(CodeAccessorKind.GET, property_field)
+        setter_body = CodeAutoAccessorMethod(CodeAccessorKind.SET, property_field)
+
+    getter = CodeMethod(
+        f"get_{property_name}",
+        property_type,
+        params=[],
+        generic_params=[],
+            is_extension=False,
+        parent_class=parent_class,
+        body_source=getter_body,
+    )
+    parent_class.methods_by_id[getter.id] = getter
+
+    void_type = codebase.resolve_type("void", namespaces, parent_class)
+    assert void_type
+    setter = CodeMethod(
+        f"set_{property_name}",
+        void_type,
+        params=[CodeParam("value", property_type, None)],
+        generic_params=[],
+        parent_class=parent_class,
+        body_source=setter_body,
+    )
+    parent_class.methods_by_id[setter.id] = setter
+
+    property = CodeProperty(property_name, property_type, getter, setter)
+    parent_class.properties_by_id[property.id] = property
+    return property
 
 
 def create_class_method(
@@ -936,7 +944,7 @@ def create_class_method(
         generic_params,
         is_extension=False,
         parent_class=parent_class,
-        body_node=body_node,
+        body_source=body_node,
     )
     parent_class.methods_by_id[method.id] = method
     # print(f"Found method {parent_class.name}::{method.name}()")

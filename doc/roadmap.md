@@ -38,7 +38,7 @@ Current level: **3**.
 - emit properties for classes
 - emit virtual methods for interfaces
 - preserve virtual/override in methods
-- emit virtual properties for interfaces
+- emit virtual property accessors for interfaces
 - translate c# arrays to c++ vectors
 - make sure stuff builds at all
 
