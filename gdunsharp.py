@@ -119,13 +119,20 @@ class CodeParam(CodeIdentifier):
         self.default_value = default_value
 
 
+class CodeVirtualKind(Enum):
+    NONE = 0
+    VIRTUAL = 1
+    PURE = 2
+    OVERRIDE = 3
+
+
 class CodeAccessorKind(Enum):
     GET = 0
     SET = 1
 
 
 class CodeAutoAccessorMethod:
-    def __init__(self, kind: CodeAccessorKind, field: CodeField):
+    def __init__(self, kind: CodeAccessorKind, field: CodeField | None):
         self.kind = kind
         self.field = field
 
@@ -137,7 +144,6 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         return_type: CodeType,
         params: list[CodeParam],
         generic_params: list[CodeGenericParameter],
-        is_extension: bool,
         parent_class: CodeClass,
         body_source: Node | CodeAutoAccessorMethod | None,
     ):
@@ -149,7 +155,8 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         CodeTypeScope.__init__(self, parent_class)
 
         self.return_type = return_type
-        self.is_extension = is_extension
+        self.is_extension = False
+        self.virtual_kind = CodeVirtualKind.NONE
         self.params = params
         self.body_source = body_source
 
@@ -160,8 +167,12 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         out = ""
         if len(self.types_by_id):
             out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
-
-        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])});"
+        if self.virtual_kind in [CodeVirtualKind.VIRTUAL, CodeVirtualKind.PURE]:
+            out += "virtual "
+        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])})"
+        if self.virtual_kind == CodeVirtualKind.PURE:
+            out += " = 0"
+        out += ";"
         return out
 
     def get_definition(self) -> str:
@@ -169,7 +180,9 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         if len(self.types_by_id):
             out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
 
-        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
+        if self.virtual_kind != CodeVirtualKind.PURE:
+            assert isinstance(self.parent, CodeClass)
+            out += f"{self.return_type.name} {self.parent.name}::{self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
 
             out += f"}}"
         return out
@@ -819,8 +832,11 @@ def create_class_property(
     property_type = get_type_from_node(codebase, type_node, namespaces, parent_class)
 
     if not getter_body and not setter_body:
-        property_field = CodeField(property_name, property_type)
-        parent_class.fields_by_id[property_field.id] = property_field
+        if parent_class.kind != CodeClassKind.INTERFACE:
+            property_field = CodeField(property_name, property_type)
+            parent_class.fields_by_id[property_field.id] = property_field
+        else:
+            property_field = None
         getter_body = CodeAutoAccessorMethod(CodeAccessorKind.GET, property_field)
         setter_body = CodeAutoAccessorMethod(CodeAccessorKind.SET, property_field)
 
@@ -829,7 +845,6 @@ def create_class_property(
         property_type,
         params=[],
         generic_params=[],
-            is_extension=False,
         parent_class=parent_class,
         body_source=getter_body,
     )
@@ -942,7 +957,6 @@ def create_class_method(
         return_type,
         params,
         generic_params,
-        is_extension=False,
         parent_class=parent_class,
         body_source=body_node,
     )
@@ -1004,6 +1018,10 @@ def gather_class_elements(codebase: Codebase):
                         create_class_method(classlike, declaration_node, namespaces)
                     case NodeKind.PROPERTY_DECLARATION.value:
                         create_class_property(classlike, declaration_node, namespaces)
+
+        if classlike.kind == CodeClassKind.INTERFACE:
+            for method in classlike.methods_by_id.values():
+                method.virtual_kind = CodeVirtualKind.PURE
 
 
 def consolidate_class_usings(codebase: Codebase):
