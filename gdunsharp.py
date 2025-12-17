@@ -47,6 +47,7 @@ class NodeKind(Enum):
     ACCESSOR_LIST = "accessor_list"
     ACCESSOR_DECLARATION = "accessor_declaration"
     ARROW_EXPRESSION = "arrow_expression_clause"
+    BASE_LIST = "base_list"
 
 
 class CodeIdentifier:
@@ -242,10 +243,12 @@ class ClassNodeContext:
         declaration_list_node: Node,
         parent_namespace: CodeNamespace,
         using_strs: list[str],
+        base_nodes: list[Node],
     ):
         self.declaration_list_node = declaration_list_node
         self.parent_namespace = parent_namespace
         self.using_strs = using_strs
+        self.base_nodes = base_nodes
 
 
 class CodeGenericParameter(CodeType):
@@ -283,10 +286,27 @@ class CodeClass(CodeType, CodeTypeScope):
         self.fields_by_id: dict[str, CodeField] = {}
         self.methods_by_id: dict[str, CodeMethod] = {}
         self.usings: list[CodeNamespace] = []
+        self.bases: list[CodeType] = []  # TODO: CodeClass?
         for gn in generic_parameter_names:
             CodeGenericParameter(gn, self)
 
         self.contexts: list[ClassNodeContext] = []
+
+    def add_base_nodes(
+        self,
+        base_nodes: list[Node],
+        codebase: Codebase,
+        namespaces: list[CodeNamespace],
+    ):
+        for base_node in base_nodes:
+            base_type = get_type_from_node(
+                codebase, base_node, namespaces, parent_scope=self
+            )
+            if base_type not in self.bases:
+                assert isinstance(base_type, CodeClass) or isinstance(
+                    base_type, DummyType
+                )
+                self.bases.append(base_type)
 
     def is_dummy(self):
         return self.is_dummy_type
@@ -335,7 +355,10 @@ class CodeClass(CodeType, CodeTypeScope):
         template_decl = self.get_template_declaration()
         if template_decl:
             template_decl += "\n"
-        out += f"{template_decl}class {self.name} {{\n"
+        out += f"{template_decl}class {self.name}"
+        if len(self.bases):
+            out += f": {', '.join([b.name for b in self.bases])} "
+        out += f"{{\n"
         out += "public:\n"
 
         for field in self.fields_by_id.values():
@@ -574,6 +597,7 @@ def get_or_create_class_from_node(
             kind = CodeClassKind.STRUCT
 
     param_names: list[str] = []
+    base_nodes: list[Node] = []
     was_identifier = False
     for child in node.named_children:
         if child.grammar_name == NodeKind.IDENTIFIER.value:
@@ -581,6 +605,9 @@ def get_or_create_class_from_node(
             assert child.text
             class_name = child.text.decode()
             was_identifier = True
+        elif child.grammar_name == NodeKind.BASE_LIST.value:
+            for base_node in child.named_children:
+                base_nodes.append(base_node)
         elif child.grammar_name == NodeKind.TYPE_PARAM_LIST.value:
             param_names = get_type_parameter_names_from_node(child)
 
@@ -595,6 +622,7 @@ def get_or_create_class_from_node(
         #     f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
         # )
     else:
+        # Might be partial and found somewhere else
         found_type = namespace.types_by_id[class_id]
         assert isinstance(found_type, CodeClass)
         code_class = found_type
@@ -604,7 +632,7 @@ def get_or_create_class_from_node(
     )
     assert declaration_list_node
     code_class.contexts.append(
-        ClassNodeContext(declaration_list_node, namespace, usings)
+        ClassNodeContext(declaration_list_node, namespace, usings, base_nodes)
     )
 
 
@@ -984,7 +1012,7 @@ def traverse_tree_level(
                 get_or_create_enum_from_node(child_node, namespace)
 
 
-def gather_namespace_and_types(trees_by_path: dict[str, Tree], codebase: Codebase):
+def gather_namespaces_and_types(trees_by_path: dict[str, Tree], codebase: Codebase):
     for path in trees_by_path:
         tree = trees_by_path[path]
         namespace = codebase.global_namespace
@@ -1009,6 +1037,8 @@ def gather_class_elements(codebase: Codebase):
             # After that's exhausted, use specific namespaces from `using`s
             namespaces += [codebase.get_namespace(ns) for ns in context.using_strs]
             namespaces += [codebase.global_namespace]
+
+            classlike.add_base_nodes(context.base_nodes, codebase, namespaces)
 
             for declaration_node in context.declaration_list_node.named_children:
                 match declaration_node.grammar_name:
@@ -1122,7 +1152,7 @@ out_path = f"out/{project_dir}"
 print("Gathering namespaces and types...")
 codebase = Codebase()
 populate_with_dummy(codebase)
-gather_namespace_and_types(trees, codebase)
+gather_namespaces_and_types(trees, codebase)
 gather_class_elements(codebase)
 consolidate_class_usings(codebase)
 

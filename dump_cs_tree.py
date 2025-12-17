@@ -15,7 +15,10 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
         "array_rank_specifier",
     ] or (
         node.grammar_name == "accessor_declaration"
-        and node.named_children[0].grammar_name != "block"
+        and (
+            len(node.named_children) == 0
+            or node.named_children[0].grammar_name != "block"
+        )
     ):
         node_text = node.text.decode() if node.text is not None else "[None]"
         print(f"{node.grammar_name}: '{node_text}'")
@@ -34,7 +37,9 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
 LANG_CSHARP = Language(tree_sitter_c_sharp.language())
 parser = Parser(LANG_CSHARP)
 
-file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\MapManager.cs").read().encode()
+file_bytes = (
+    open("test_scripts/gdfire\Piwnica\GdFire\PLayers\Player.cs").read().encode()
+)
 tree = parser.parse(file_bytes)
 
 print_tree_node(tree.root_node)

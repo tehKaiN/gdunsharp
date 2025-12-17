@@ -37,9 +37,11 @@ Current level: **3**.
 - read properties
 - emit properties for classes
 - emit virtual methods for interfaces
+- parse inheritance chain
+- emit inheritance chain
 - preserve virtual/override in methods
 - emit virtual property accessors for interfaces
-- translate c# arrays to c++ vectors
+- translate c# arrays to `List<T>`
 - make sure stuff builds at all
 
 ## Level 5
