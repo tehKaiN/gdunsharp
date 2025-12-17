@@ -48,6 +48,7 @@ class NodeKind(Enum):
     ACCESSOR_DECLARATION = "accessor_declaration"
     ARROW_EXPRESSION = "arrow_expression_clause"
     BASE_LIST = "base_list"
+    MODIFIER = "modifier"
 
 
 class CodeIdentifier:
@@ -173,6 +174,8 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])})"
         if self.virtual_kind == CodeVirtualKind.PURE:
             out += " = 0"
+        elif self.virtual_kind == CodeVirtualKind.OVERRIDE:
+            out += " override"
         out += ";"
         return out
 
@@ -904,10 +907,16 @@ def create_class_method(
     body_node: Node | None = None
     name_node: Node | None = None
     generic_param_names: list[str] = []
+    virtual_kind = CodeVirtualKind.NONE
     for child_node in node.named_children:
         match child_node.grammar_name:
             case NodeKind.TUPLE_TYPE.value:
                 raise Exception("Tuple types aren't supported")
+            case NodeKind.MODIFIER.value:
+                if child_node.text == b"virtual":
+                    virtual_kind = CodeVirtualKind.VIRTUAL
+                elif child_node.text == b"override":
+                    virtual_kind = CodeVirtualKind.OVERRIDE
             case (
                 NodeKind.PREDEFINED_TYPE.value
                 | NodeKind.ARRAY_TYPE.value
@@ -988,6 +997,8 @@ def create_class_method(
         parent_class=parent_class,
         body_source=body_node,
     )
+    method.virtual_kind = virtual_kind
+
     parent_class.methods_by_id[method.id] = method
     # print(f"Found method {parent_class.name}::{method.name}()")
     return method
