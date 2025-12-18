@@ -41,16 +41,18 @@ Current level: **3**.
 - emit inheritance chain
 - preserve virtual/override in methods
 - emit virtual property accessors for interfaces
+- emit `override` for methods/accessors that implement interface
 - translate c# arrays to `List<T>`
-- make sure stuff builds at all
 
 ## Level 5
 
 - read nested types in classes
 - resolve nested types in classes
 - emit nested types
+- integrate with godot-cpp
+- make sure stuff builds at all
 - read signal signatures
-- emit signal code
+- emit signal boilerplate
 
 ## Level 6 - usable
 

@@ -289,7 +289,9 @@ class CodeClass(CodeType, CodeTypeScope):
         self.fields_by_id: dict[str, CodeField] = {}
         self.methods_by_id: dict[str, CodeMethod] = {}
         self.usings: list[CodeNamespace] = []
-        self.bases: list[CodeType] = []  # TODO: CodeClass?
+        self.bases: list[CodeType] = (
+            []
+        )  # TODO: CodeClass after getting rid of DummyType?
         for gn in generic_parameter_names:
             CodeGenericParameter(gn, self)
 
@@ -382,6 +384,17 @@ class CodeClass(CodeType, CodeTypeScope):
 
         out += f"}} // namespace {ns_name}\n"
         return out
+
+    def find_virtual_method_in_bases(self, method_id: str) -> CodeMethod | None:
+        for base in self.bases:
+            if isinstance(base, CodeClass):
+                if method_id in base.methods_by_id:
+                    return base.methods_by_id[method_id]
+                else:
+                    method = base.find_virtual_method_in_bases(method_id)
+                    if method:
+                        return method
+        return None
 
 
 class CodeEnumEntry(CodeIdentifier):
@@ -997,6 +1010,15 @@ def create_class_method(
         parent_class=parent_class,
         body_source=body_node,
     )
+
+    if parent_class.kind == CodeClassKind.INTERFACE:
+        virtual_kind = CodeVirtualKind.PURE
+    elif virtual_kind != CodeVirtualKind.OVERRIDE:
+        # Check for implementation of interfaces
+        parent_method = parent_class.find_virtual_method_in_bases(method.id)
+        if parent_method and parent_method.virtual_kind != CodeVirtualKind.NONE:
+            # print(f"detected method {parent_class.id}::{method.id} as interface implementation")
+            virtual_kind = CodeVirtualKind.OVERRIDE
     method.virtual_kind = virtual_kind
 
     parent_class.methods_by_id[method.id] = method
@@ -1059,10 +1081,6 @@ def gather_class_elements(codebase: Codebase):
                         create_class_method(classlike, declaration_node, namespaces)
                     case NodeKind.PROPERTY_DECLARATION.value:
                         create_class_property(classlike, declaration_node, namespaces)
-
-        if classlike.kind == CodeClassKind.INTERFACE:
-            for method in classlike.methods_by_id.values():
-                method.virtual_kind = CodeVirtualKind.PURE
 
 
 def consolidate_class_usings(codebase: Codebase):
