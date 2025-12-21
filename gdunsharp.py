@@ -60,20 +60,30 @@ class CodeIdentifier:
 class CodeType(CodeIdentifier):
     def __init__(self, name: str, id: str, parent_type_scope: CodeTypeScope):
         super().__init__(name, id)
+        self.replacement: CodeType | None = None
         self.parent_type_scope = parent_type_scope
         parent_type_scope.types_by_id[id] = self
 
-    def is_dummy(self) -> bool:
-        raise NotImplementedError("CodeType.is_dummy()")
+    def is_external(self) -> bool:
+        raise NotImplementedError("CodeType.is_external()")
 
     def is_emmittable(self) -> bool:
-        return not self.is_dummy()
+        return not self.is_external()
 
     def get_forward_declaration(self) -> str:
         raise NotImplementedError("CodeType.get_forward_declaration()")
 
     def get_header_contents(self) -> str:
         raise NotImplementedError("CodeType.get_header_contents()")
+
+    def resolve(self) -> CodeType:
+        # if self.replacement:
+        #     assert isinstance(self.parent_type_scope, CodeNamespace)
+        #     assert isinstance(self.replacement.parent_type_scope, CodeNamespace)
+        #     print(
+        #         f"replacing type {self.parent_type_scope.get_full_path()}.{self.id} with {self.replacement.parent_type_scope.get_full_path()}.{self.replacement.id}"
+        #     )
+        return self.replacement if self.replacement else self
 
     def emit_cpp(self, path: str):
         if self.is_emmittable():
@@ -99,18 +109,18 @@ class CodeNullableType(CodeType):
         self.base_type = base_type
         # print(f"Found nullable type {self.name}")
 
-    def is_dummy(self) -> bool:
+    def is_external(self) -> bool:
         return False
 
     def is_emmittable(self) -> bool:
         return False
 
 
-class DummyType(CodeType):
+class ExternalType(CodeType):
     def __init__(self, name: str, parent_type_scope: CodeTypeScope):
         super().__init__(name=name, id=name, parent_type_scope=parent_type_scope)
 
-    def is_dummy(self):
+    def is_external(self):
         return True
 
 
@@ -233,8 +243,8 @@ class CodeClassSpecialized(CodeType):
         self.type_params = type_params
         # print(f"Found generic class specialization: {self.name}")
 
-    def is_dummy(self):
-        return self.generic_class.is_dummy()
+    def is_external(self):
+        return self.generic_class.is_external()
 
     def is_emmittable(self) -> bool:
         return False
@@ -258,7 +268,7 @@ class CodeGenericParameter(CodeType):
     def __init__(self, name: str, parent_scope: CodeTypeScope):
         super().__init__(name, name, parent_scope)
 
-    def is_dummy(self) -> bool:
+    def is_external(self) -> bool:
         return False
 
     def is_emmittable(self) -> bool:
@@ -283,7 +293,7 @@ class CodeClass(CodeType, CodeTypeScope):
         CodeTypeScope.__init__(self, parent_namespace)
 
         self.kind = kind
-        self.is_dummy_type = False
+        self.is_external_type = False
         self.ancestors: list[CodeClass] = []
         self.properties_by_id: dict[str, CodeProperty] = {}
         self.fields_by_id: dict[str, CodeField] = {}
@@ -291,7 +301,7 @@ class CodeClass(CodeType, CodeTypeScope):
         self.usings: list[CodeNamespace] = []
         self.bases: list[CodeType] = (
             []
-        )  # TODO: CodeClass after getting rid of DummyType?
+        )  # TODO: CodeClass after getting rid of ExternalType?
         for gn in generic_parameter_names:
             CodeGenericParameter(gn, self)
 
@@ -309,12 +319,12 @@ class CodeClass(CodeType, CodeTypeScope):
             )
             if base_type not in self.bases:
                 assert isinstance(base_type, CodeClass) or isinstance(
-                    base_type, DummyType
+                    base_type, ExternalType
                 )
                 self.bases.append(base_type)
 
-    def is_dummy(self):
-        return self.is_dummy_type
+    def is_external(self):
+        return self.is_external_type
 
     def get_template_declaration(self) -> str:
         generic_params = [
@@ -408,7 +418,7 @@ class CodeEnum(CodeType):
         super().__init__(name=name, id=name, parent_type_scope=parent_namespace)
         self.entries: list[CodeEnumEntry] = []
 
-    def is_dummy(self):
+    def is_external(self):
         return False
 
     def get_forward_declaration(self) -> str:
@@ -504,10 +514,10 @@ class Codebase:
     def __init__(self):
         self.global_namespace = CodeNamespace(name="", parent=None)
 
-    def get_all_types(self) -> list[CodeType]:
+    def get_all_namespace_types(self) -> list[CodeType]:
         return self.global_namespace.get_all_types()
 
-    def get_namespace(self, namespace_path: str) -> CodeNamespace:
+    def get_namespace_from_path(self, namespace_path: str) -> CodeNamespace:
         if namespace_path == "":
             return self.global_namespace
 
@@ -523,17 +533,24 @@ class Codebase:
         namespaces: list[CodeNamespace],
         parent_scope: CodeTypeScope | None,
     ) -> CodeType | None:
+        type: CodeType | None = None
         while parent_scope and len(parent_scope.types_by_id):
             if type_id in parent_scope.types_by_id:
-                return parent_scope.types_by_id[type_id]
+                type = parent_scope.types_by_id[type_id]
+                break
             parent_scope = parent_scope.parent
 
-        for namespace in namespaces:
-            if type_id in namespace.types_by_id:
-                return namespace.types_by_id[type_id]
+        if not type:
+            for namespace in namespaces:
+                if type_id in namespace.types_by_id:
+                    type = namespace.types_by_id[type_id]
+                    break
 
-        print(f"ERR: type {type_id} not found")
-        return None
+        if not type:
+            print(f"ERR: type {type_id} not found")
+            return None
+        resolved = type.resolve()
+        return resolved
 
     def emit_cpp(self, path: str):
         self.global_namespace.emit_cpp(path)
@@ -737,10 +754,10 @@ def get_array_type_from_node(
     assert array_rank_node.text
     assert array_rank_node.text.decode() == "[]", "Unsupported non-1D array"
 
-    generic_type_id = CodeClass.get_id("List", 1)
+    generic_type_id = CodeClass.get_id("LocalVector", 1)
     generic_type = codebase.resolve_type(
         generic_type_id,
-        namespaces + [codebase.get_namespace("System.Collections.Generic")],
+        namespaces + [codebase.get_namespace_from_path("godot")],
         parent_scope,
     )
     assert generic_type
@@ -780,7 +797,7 @@ def get_type_from_node(
             resolved_type = codebase.resolve_type(type_id, namespaces, parent_scope)
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
-                resolved_type = DummyType(type_id, parent_scope)
+                resolved_type = ExternalType(type_id, parent_scope)
             type = resolved_type
 
         case NodeKind.NULLABLE_TYPE.value:
@@ -1053,7 +1070,9 @@ def gather_namespaces_and_types(trees_by_path: dict[str, Tree], codebase: Codeba
 
 
 def gather_class_elements(codebase: Codebase):
-    classlikes = [t for t in codebase.get_all_types() if isinstance(t, CodeClass)]
+    classlikes = [
+        t for t in codebase.get_all_namespace_types() if isinstance(t, CodeClass)
+    ]
     print(f"Got {len(classlikes)} class-likes")
     for classlike in classlikes:
         for context in classlike.contexts:
@@ -1068,7 +1087,9 @@ def gather_class_elements(codebase: Codebase):
                 ns = ns.parent
 
             # After that's exhausted, use specific namespaces from `using`s
-            namespaces += [codebase.get_namespace(ns) for ns in context.using_strs]
+            namespaces += [
+                codebase.get_namespace_from_path(ns) for ns in context.using_strs
+            ]
             namespaces += [codebase.global_namespace]
 
             classlike.add_base_nodes(context.base_nodes, codebase, namespaces)
@@ -1084,14 +1105,31 @@ def gather_class_elements(codebase: Codebase):
 
 
 def consolidate_class_usings(codebase: Codebase):
-    classlikes = [t for t in codebase.get_all_types() if isinstance(t, CodeClass)]
+    def try_add_type_namespace(classlike: CodeClass, type: CodeType):
+        parent_namespace = type.parent_type_scope
+        if (
+            isinstance(parent_namespace, CodeNamespace)
+            and parent_namespace not in classlike.usings
+        ):
+            classlike.usings.append(parent_namespace)
+
+    classlikes = [
+        t for t in codebase.get_all_namespace_types() if isinstance(t, CodeClass)
+    ]
     print(f"Got {len(classlikes)} class-likes")
+
     for classlike in classlikes:
-        for context in classlike.contexts:
-            for using in context.using_strs:
-                ns = codebase.get_namespace(using)
-                if ns not in classlike.usings:
-                    classlike.usings.append(ns)
+        for type in classlike.types_by_id.values():
+            try_add_type_namespace(classlike, type)
+
+        for field in classlike.fields_by_id.values():
+            try_add_type_namespace(classlike, field.type)
+
+        for method in classlike.methods_by_id.values():
+            # TODO: gather namespaces for types from method retval
+            # TODO: gather namespaces for types from method params
+            # TODO: gather namespaces for types from method body
+            pass
 
 
 def prepare_out_directory(out_path: str):
@@ -1103,73 +1141,111 @@ def prepare_out_directory(out_path: str):
         os.makedirs(out_path, exist_ok=True)
 
 
-def populate_with_dummy(codebase: Codebase):
-    def make_dummy_generic(name: str, param_names: list[str], namespace: CodeNamespace):
-        dummy = CodeClass(name, CodeClassKind.CLASS, param_names, namespace)
-        dummy.is_dummy_type = True
+def load_external_types(codebase: Codebase):
+    def make_external_generic(
+        name: str, param_names: list[str], namespace: CodeNamespace
+    ) -> CodeClass:
+        extern = CodeClass(name, CodeClassKind.CLASS, param_names, namespace)
+        extern.is_external_type = True
+        return extern
 
-    def make_dummy_class(name, namespace):
-        dummy = CodeClass(name, CodeClassKind.CLASS, [], namespace)
-        dummy.is_dummy_type = True
+    def make_external_class(name, namespace) -> CodeClass:
+        extern = CodeClass(name, CodeClassKind.CLASS, [], namespace)
+        extern.is_external_type = True
+        return extern
+
+    def make_godot_class(
+        name: str, ns_godotsharp: CodeNamespace, ns_godotcpp: CodeNamespace
+    ):
+        sharp_class = make_external_class(name, ns_godotsharp)
+        cpp_class = make_external_class(name, ns_godotcpp)
+
+        sharp_class.replacement = cpp_class
+
+    def make_collection_replacement(
+        name_sharp: str,
+        name_godot: str,
+        param_names: list[str],
+        ns_sharp: CodeNamespace,
+        ns_godot: CodeNamespace,
+    ):
+        sharp_collection = make_external_generic(name_sharp, param_names, ns_sharp)
+        godot_collection = make_external_generic(name_godot, param_names, ns_godot)
+        sharp_collection.replacement = godot_collection
 
     ns_system = CodeNamespace("System", codebase.global_namespace)
     ns_system_linq = CodeNamespace("Linq", ns_system)
     ns_system_collections = CodeNamespace("Collections", ns_system)
     ns_system_collections_generic = CodeNamespace("Generic", ns_system_collections)
     ns_system_io = CodeNamespace("IO", ns_system)
-    ns_system_text = CodeNamespace("Text", ns_system)
-    ns_system_text_regularexpressions = CodeNamespace(
-        "RegularExpressions", ns_system_text
-    )
-    ns_godot = CodeNamespace("Godot", codebase.global_namespace)
-    ns_gdunit4 = CodeNamespace("GdUnit4", codebase.global_namespace)
-    ns_gdunit4_assertions = CodeNamespace("Assertions", ns_gdunit4)
 
-    make_dummy_generic("HashSet", ["TElement"], ns_system_collections_generic)
-    make_dummy_generic("List", ["TElement"], ns_system_collections_generic)
-    make_dummy_generic("IReadOnlyList", ["TElement"], ns_system_collections_generic)
-    make_dummy_generic(
-        "IReadOnlyDictionary", ["TKey", "TValue"], ns_system_collections_generic
+    ns_godotcpp = CodeNamespace("godot", codebase.global_namespace)
+    ns_godotsharp = CodeNamespace("Godot", codebase.global_namespace)
+
+    make_collection_replacement(
+        "List", "LocalVector", ["TElement"], ns_system_collections_generic, ns_godotcpp
     )
-    make_dummy_generic(
-        "Dictionary",
+    make_collection_replacement(
+        "IReadOnlyList",
+        "LocalVector",
+        ["TElement"],
+        ns_system_collections_generic,
+        ns_godotcpp,
+    )
+    make_collection_replacement(
+        "HashSet", "HashSet", ["TElement"], ns_system_collections_generic, ns_godotcpp
+    )
+    make_collection_replacement(
+        "IReadOnlyDictionary",
+        "HashMap",
         ["TKey", "TValue"],
         ns_system_collections_generic,
+        ns_godotcpp,
+    )
+    make_collection_replacement(
+        "Dictionary",
+        "HashMap",
+        ["TKey", "TValue"],
+        ns_system_collections_generic,
+        ns_godotcpp,
     )
 
-    make_dummy_class("AnimationPlayer", ns_godot)
-    make_dummy_class("Area3D", ns_godot)
-    make_dummy_class("Button", ns_godot)
-    make_dummy_class("ButtonGroup", ns_godot)
-    make_dummy_class("Color", ns_godot)
-    make_dummy_class("ColorRect", ns_godot)
-    make_dummy_class("Control", ns_godot)
-    make_dummy_class("GpuParticles3D", ns_godot)
-    make_dummy_class("HBoxContainer", ns_godot)
-    make_dummy_class("Label", ns_godot)
-    make_dummy_class("Marker3D", ns_godot)
-    make_dummy_class("MeshInstance3D", ns_godot)
-    make_dummy_class("NavigationAgent3D", ns_godot)
-    make_dummy_class("Node", ns_godot)
-    make_dummy_class("Node3D", ns_godot)
-    make_dummy_class("PackedScene", ns_godot)
-    make_dummy_class("ProgressBar", ns_godot)
-    make_dummy_class("ShaderMaterial", ns_godot)
-    make_dummy_class("StaticBody3D", ns_godot)
-    make_dummy_class("Texture2D", ns_godot)
-    make_dummy_class("Timer", ns_godot)
-    make_dummy_class("VBoxContainer", ns_godot)
-    make_dummy_class("Vector2", ns_godot)
-    make_dummy_class("Vector3", ns_godot)
+    make_godot_class("AnimationPlayer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Area3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Button", ns_godotsharp, ns_godotcpp)
+    make_godot_class("ButtonGroup", ns_godotsharp, ns_godotcpp)
+    make_godot_class("CharacterBody3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("CheckBox", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Color", ns_godotsharp, ns_godotcpp)
+    make_godot_class("ColorRect", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Control", ns_godotsharp, ns_godotcpp)
+    make_godot_class("GpuParticles3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("HBoxContainer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Label", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Marker3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("MarginContainer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("MeshInstance3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("NavigationAgent3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Node", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Node3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("PackedScene", ns_godotsharp, ns_godotcpp)
+    make_godot_class("PanelContainer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("ProgressBar", ns_godotsharp, ns_godotcpp)
+    make_godot_class("ShaderMaterial", ns_godotsharp, ns_godotcpp)
+    make_godot_class("StaticBody3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Texture2D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("TextureRect", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Timer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("VBoxContainer", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Vector2", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Vector3", ns_godotsharp, ns_godotcpp)
 
-    make_dummy_class("Regex", ns_system_text_regularexpressions)
-
-    make_dummy_class("bool", codebase.global_namespace)
-    make_dummy_class("float", codebase.global_namespace)
-    make_dummy_class("double", codebase.global_namespace)
-    make_dummy_class("int", codebase.global_namespace)
-    make_dummy_class("string", codebase.global_namespace)
-    make_dummy_class("void", codebase.global_namespace)
+    make_external_class("bool", codebase.global_namespace)
+    make_external_class("float", codebase.global_namespace)
+    make_external_class("double", codebase.global_namespace)
+    make_external_class("int", codebase.global_namespace)
+    make_external_class("string", codebase.global_namespace)
+    make_external_class("void", codebase.global_namespace)
 
 
 print("Parsing C# files...")
@@ -1180,7 +1256,7 @@ out_path = f"out/{project_dir}"
 # Step 2: build code database of stuff in file
 print("Gathering namespaces and types...")
 codebase = Codebase()
-populate_with_dummy(codebase)
+load_external_types(codebase)
 gather_namespaces_and_types(trees, codebase)
 gather_class_elements(codebase)
 consolidate_class_usings(codebase)

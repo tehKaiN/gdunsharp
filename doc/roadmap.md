@@ -1,7 +1,7 @@
 # Roadmap
 
 Development is split across complexity levels.
-Current level: **3**.
+Current level: **4**.
 
 ## Level 1
 
@@ -42,14 +42,11 @@ Current level: **3**.
 - preserve virtual/override in methods
 - emit virtual property accessors for interfaces
 - emit `override` for methods/accessors that implement interface
-- translate c# arrays to `List<T>`
+- translate c# collections to godot equivalents
 
 ## Level 5
 
-- read nested types in classes
-- resolve nested types in classes
-- emit nested types
-- integrate with godot-cpp
+- replace remaining c# system types with external types from godot-cpp
 - make sure stuff builds at all
 - read signal signatures
 - emit signal boilerplate
@@ -67,7 +64,10 @@ Current level: **3**.
 
 ## Future
 
-- `us Foo = Bar`
+- read nested types in classes
+- resolve nested types in classes
+- emit nested types
+- `using Foo = Bar`
 - `async`/`await`
 - somehow support Newtonsoft.JSON
 - read scoped namespaces
