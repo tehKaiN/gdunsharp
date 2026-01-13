@@ -51,6 +51,13 @@ class NodeKind(Enum):
     MODIFIER = "modifier"
 
 
+class CodeEmitKind(Enum):
+    INCLUDE = 0
+    DECLARATION = 1
+    FORWARD_DECLARATION = 2
+    HEADER_FILE = 3
+
+
 class CodeIdentifier:
     def __init__(self, name: str, id: str = ""):
         self.id = id if id else name
@@ -62,12 +69,15 @@ class CodeType(CodeIdentifier):
         super().__init__(name, id)
         self.replacement: CodeType | None = None
         self.parent_type_scope = parent_type_scope
+        self.custom_include_path = ""
         parent_type_scope.types_by_id[id] = self
 
     def is_external(self) -> bool:
         raise NotImplementedError("CodeType.is_external()")
 
-    def is_emmittable(self) -> bool:
+    def can_emit(self, emit_kind: CodeEmitKind) -> bool:
+        if emit_kind == CodeEmitKind.INCLUDE:
+            return True
         return not self.is_external()
 
     def get_forward_declaration(self) -> str:
@@ -86,11 +96,13 @@ class CodeType(CodeIdentifier):
         return self.replacement if self.replacement else self
 
     def emit_cpp(self, path: str):
-        if self.is_emmittable():
+        if self.can_emit(CodeEmitKind.HEADER_FILE):
             with open(f"{path}/{camel_to_snake(self.name)}.hpp", "w") as out_file:
                 out_file.write(self.get_header_contents())
 
     def get_include_path(self) -> str:
+        if self.custom_include_path:
+            return self.custom_include_path
         assert isinstance(self.parent_type_scope, CodeNamespace)
         return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
 
@@ -112,7 +124,7 @@ class CodeNullableType(CodeType):
     def is_external(self) -> bool:
         return False
 
-    def is_emmittable(self) -> bool:
+    def can_emit(self, emit_kind: CodeEmitKind) -> bool:
         return False
 
 
@@ -246,7 +258,7 @@ class CodeClassSpecialized(CodeType):
     def is_external(self):
         return self.generic_class.is_external()
 
-    def is_emmittable(self) -> bool:
+    def can_emit(self, emit_kind: CodeEmitKind) -> bool:
         return False
 
 
@@ -271,7 +283,7 @@ class CodeGenericParameter(CodeType):
     def is_external(self) -> bool:
         return False
 
-    def is_emmittable(self) -> bool:
+    def can_emit(self, emit_kind: CodeEmitKind) -> bool:
         return False
 
 
@@ -348,6 +360,7 @@ class CodeClass(CodeType, CodeTypeScope):
         out = "#pragma once\n\n"
 
         parent_ns: CodeTypeScope | None = self.parent_type_scope
+        out += "// namespace\n"
         while parent_ns:
             assert isinstance(parent_ns, CodeNamespace)
             if not parent_ns.name:
@@ -356,15 +369,19 @@ class CodeClass(CodeType, CodeTypeScope):
             parent_ns = parent_ns.parent
         out += "\n"
 
+        # TODO: exclude "" and parent from .usings[]?
+        out += "// usings\n"
         for using in self.usings:
-            out += f"#include <{using.get_header_path()}>\n"
+            if using.name != "" and using != self.parent_type_scope:
+                out += f"#include <{using.get_header_path()}>\n"
         out += "\n"
 
         ns_name = self.parent_type_scope.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
 
         for using in self.usings:
-            out += f"using namespace {using.get_full_path().replace('.','::')};\n"
+            if using.name != "" and using != self.parent_type_scope:
+                out += f"using namespace {using.get_full_path().replace('.','::')};\n"
         out += "\n"
 
         template_decl = self.get_template_declaration()
@@ -442,10 +459,11 @@ class CodeEnum(CodeType):
 
 
 class CodeNamespace(CodeIdentifier, CodeTypeScope):
-    def __init__(self, name: str, parent: CodeNamespace | None):
+    def __init__(self, name: str, parent: CodeNamespace | None, is_dummy: bool = False):
         CodeIdentifier.__init__(self, name)
         CodeTypeScope.__init__(self, parent)
         self.subnamespaces: dict[str, CodeNamespace] = {}
+        self.is_dummy = is_dummy
 
         if parent:
             parent.subnamespaces[name] = self
@@ -484,6 +502,8 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         return types
 
     def emit_cpp(self, path: str):
+        if self.is_dummy:
+            return
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/namespace.hpp", "w") as out_file:
             out_file.write(self.get_namespace_header())
@@ -499,12 +519,12 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         ns_name = self.get_full_path().replace(".", "::")
         out += f"namespace {ns_name} {{\n\n"
         for type in self.types_by_id.values():
-            if type.is_emmittable():
+            if type.can_emit(CodeEmitKind.FORWARD_DECLARATION):
                 out += f"{type.get_forward_declaration()}\n"
         out += f"\n}} // namespace {ns_name}\n\n"
 
         for type in self.types_by_id.values():
-            if type.is_emmittable():
+            if type.can_emit(CodeEmitKind.INCLUDE):
                 out += f"#include <{type.get_include_path()}>\n"
         out += "\n"
         return out
@@ -1119,6 +1139,9 @@ def consolidate_class_usings(codebase: Codebase):
     print(f"Got {len(classlikes)} class-likes")
 
     for classlike in classlikes:
+        for base in classlike.bases:
+            try_add_type_namespace(classlike, base)
+
         for type in classlike.types_by_id.values():
             try_add_type_namespace(classlike, type)
 
@@ -1155,10 +1178,16 @@ def load_external_types(codebase: Codebase):
         return extern
 
     def make_godot_class(
-        name: str, ns_godotsharp: CodeNamespace, ns_godotcpp: CodeNamespace
+        name: str,
+        ns_godotsharp: CodeNamespace,
+        ns_godotcpp: CodeNamespace,
+        include_name: str | None = None,
     ):
         sharp_class = make_external_class(name, ns_godotsharp)
         cpp_class = make_external_class(name, ns_godotcpp)
+        if not include_name:
+            include_name = camel_to_snake(cpp_class.name)
+        cpp_class.custom_include_path = f"godot_cpp/classes/{include_name}.hpp"
 
         sharp_class.replacement = cpp_class
 
@@ -1172,6 +1201,9 @@ def load_external_types(codebase: Codebase):
         sharp_collection = make_external_generic(name_sharp, param_names, ns_sharp)
         godot_collection = make_external_generic(name_godot, param_names, ns_godot)
         sharp_collection.replacement = godot_collection
+        godot_collection.custom_include_path = (
+            f"godot_cpp/templates/{camel_to_snake(godot_collection.name)}.hpp"
+        )
 
     ns_system = CodeNamespace("System", codebase.global_namespace)
     ns_system_linq = CodeNamespace("Linq", ns_system)
@@ -1180,7 +1212,7 @@ def load_external_types(codebase: Codebase):
     ns_system_io = CodeNamespace("IO", ns_system)
 
     ns_godotcpp = CodeNamespace("godot", codebase.global_namespace)
-    ns_godotsharp = CodeNamespace("Godot", codebase.global_namespace)
+    ns_godotsharp = CodeNamespace("Godot", codebase.global_namespace, is_dummy=True)
 
     make_collection_replacement(
         "List", "LocalVector", ["TElement"], ns_system_collections_generic, ns_godotcpp
@@ -1211,7 +1243,7 @@ def load_external_types(codebase: Codebase):
     )
 
     make_godot_class("AnimationPlayer", ns_godotsharp, ns_godotcpp)
-    make_godot_class("Area3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Area3D", ns_godotsharp, ns_godotcpp, include_name="area3d")
     make_godot_class("Button", ns_godotsharp, ns_godotcpp)
     make_godot_class("ButtonGroup", ns_godotsharp, ns_godotcpp)
     make_godot_class("CharacterBody3D", ns_godotsharp, ns_godotcpp)
@@ -1219,21 +1251,32 @@ def load_external_types(codebase: Codebase):
     make_godot_class("Color", ns_godotsharp, ns_godotcpp)
     make_godot_class("ColorRect", ns_godotsharp, ns_godotcpp)
     make_godot_class("Control", ns_godotsharp, ns_godotcpp)
-    make_godot_class("GpuParticles3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class(
+        "GpuParticles3D", ns_godotsharp, ns_godotcpp, include_name="gpu_particles3d"
+    )
     make_godot_class("HBoxContainer", ns_godotsharp, ns_godotcpp)
     make_godot_class("Label", ns_godotsharp, ns_godotcpp)
-    make_godot_class("Marker3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Marker3D", ns_godotsharp, ns_godotcpp, include_name="marker3d")
     make_godot_class("MarginContainer", ns_godotsharp, ns_godotcpp)
-    make_godot_class("MeshInstance3D", ns_godotsharp, ns_godotcpp)
-    make_godot_class("NavigationAgent3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class(
+        "MeshInstance3D", ns_godotsharp, ns_godotcpp, include_name="mesh_instance3d"
+    )
+    make_godot_class(
+        "NavigationAgent3D",
+        ns_godotsharp,
+        ns_godotcpp,
+        include_name="navigation_agent3d",
+    )
     make_godot_class("Node", ns_godotsharp, ns_godotcpp)
-    make_godot_class("Node3D", ns_godotsharp, ns_godotcpp)
+    make_godot_class("Node3D", ns_godotsharp, ns_godotcpp, include_name="node3d")
     make_godot_class("PackedScene", ns_godotsharp, ns_godotcpp)
     make_godot_class("PanelContainer", ns_godotsharp, ns_godotcpp)
     make_godot_class("ProgressBar", ns_godotsharp, ns_godotcpp)
     make_godot_class("ShaderMaterial", ns_godotsharp, ns_godotcpp)
-    make_godot_class("StaticBody3D", ns_godotsharp, ns_godotcpp)
-    make_godot_class("Texture2D", ns_godotsharp, ns_godotcpp)
+    make_godot_class(
+        "StaticBody3D", ns_godotsharp, ns_godotcpp, include_name="static_body3d"
+    )
+    make_godot_class("Texture2D", ns_godotsharp, ns_godotcpp, include_name="texture2d")
     make_godot_class("TextureRect", ns_godotsharp, ns_godotcpp)
     make_godot_class("Timer", ns_godotsharp, ns_godotcpp)
     make_godot_class("VBoxContainer", ns_godotsharp, ns_godotcpp)

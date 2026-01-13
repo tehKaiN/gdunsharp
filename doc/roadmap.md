@@ -47,6 +47,7 @@ Current level: **4**.
 ## Level 5
 
 - replace remaining c# system types with external types from godot-cpp
+- use proper include paths for godot includes
 - make sure stuff builds at all
 - read signal signatures
 - emit signal boilerplate
@@ -71,3 +72,4 @@ Current level: **4**.
 - `async`/`await`
 - somehow support Newtonsoft.JSON
 - read scoped namespaces
+- replace `System.Collections.RegularExpressions.Regex` with CTRE
