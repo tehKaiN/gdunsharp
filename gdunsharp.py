@@ -308,6 +308,7 @@ class CodeClass(CodeType, CodeTypeScope):
 
         self.kind = kind
         self.is_external_type = False
+        self.is_godotic = False
         self.ancestors: list[CodeClass] = []
         self.properties_by_id: dict[str, CodeProperty] = {}
         self.fields_by_id: dict[str, CodeField] = {}
@@ -393,6 +394,19 @@ class CodeClass(CodeType, CodeTypeScope):
         if len(self.bases):
             out += f": {', '.join([b.name for b in self.bases])} "
         out += f"{{\n"
+
+        if self.is_godotic:
+            godot_base = [
+                b
+                for b in self.bases
+                if isinstance(b, CodeClass) and b.kind == CodeClassKind.CLASS
+            ][0]
+            assert godot_base.is_godotic
+            out += f"\tGDCLASS({self.name}, {godot_base.name})\n\n"
+            out += "protected:\n"
+            out += "\tstatic void _bind_methods();\n"
+            out += "\n"
+
         out += "public:\n"
 
         for field in self.fields_by_id.values():
@@ -654,12 +668,17 @@ def get_or_create_class_from_node(
     param_names: list[str] = []
     base_nodes: list[Node] = []
     was_identifier = False
+    is_partial = False
     for child in node.named_children:
         if child.grammar_name == NodeKind.IDENTIFIER.value:
             assert not was_identifier
             assert child.text
             class_name = child.text.decode()
             was_identifier = True
+        elif child.grammar_name == NodeKind.MODIFIER.value:
+            assert child.text
+            if child.text.decode() == "partial":
+                is_partial = True
         elif child.grammar_name == NodeKind.BASE_LIST.value:
             for base_node in child.named_children:
                 base_nodes.append(base_node)
@@ -673,6 +692,10 @@ def get_or_create_class_from_node(
     assert class_name
     if class_id not in namespace.types_by_id:
         code_class = CodeClass(class_name, kind, param_names, namespace)
+        if (
+            is_partial and kind == CodeClassKind.CLASS
+        ):  # TODO: check if inherits from godotic class
+            code_class.is_godotic = True
         # print(
         #     f"Found {kind.name.lower()} {class_name} in namespace {namespace.get_full_path()}"
         # )
@@ -1215,6 +1238,7 @@ def load_external_types(codebase: Codebase):
         if not include_name:
             include_name = camel_to_snake(cpp_class.name)
         cpp_class.custom_include_path = f"godot_cpp/classes/{include_name}.hpp"
+        cpp_class.is_godotic = True
 
         sharp_class.replacement = cpp_class
 
