@@ -218,6 +218,8 @@ class CodeField(CodeIdentifier):
     def __init__(self, name: str, type: CodeType):
         super().__init__(name)
         self.type = type
+        self.export_getter: CodeMethod | None = None
+        self.export_setter: CodeMethod | None = None
 
     def get_declaration(self) -> str:
         return f"{self.type.name} {self.name};"
@@ -833,7 +835,7 @@ def get_type_from_node(
 
 
 def create_class_field(
-    classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
+    parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
 ) -> CodeField:
     declaration_node = find_node_by_grammar_name(
         node, NodeKind.VARIABLE_DECLARATION.value
@@ -842,7 +844,7 @@ def create_class_field(
     type_node = declaration_node.named_children[0]
     declarator_node = declaration_node.named_children[1]
 
-    field_type = get_type_from_node(codebase, type_node, namespaces, classlike)
+    field_type = get_type_from_node(codebase, type_node, namespaces, parent_classlike)
 
     assert declarator_node.grammar_name == NodeKind.VARIABLE_DECLARATOR.value
     name_node = declarator_node.named_children[0]
@@ -851,7 +853,32 @@ def create_class_field(
     assert name_node.text
     field_name = name_node.text.decode()
     field = CodeField(field_name, field_type)
-    classlike.fields_by_id[field.name] = field
+    parent_classlike.fields_by_id[field.name] = field
+
+    # TODO: scan attributes, check for "Export" in attributes
+    if True:
+        field.export_getter = CodeMethod(
+            f"get_{field_name}",
+            field_type,
+            params=[],
+            generic_params=[],
+            parent_class=parent_classlike,
+            body_source=CodeAutoAccessorMethod(CodeAccessorKind.GET, field),
+        )
+        parent_classlike.methods_by_id[field.export_getter.id] = field.export_getter
+
+        void_type = codebase.resolve_type("void", namespaces, parent_classlike)
+        assert void_type
+        field.export_setter = CodeMethod(
+            f"set_{field_name}",
+            void_type,
+            params=[CodeParam("value", field_type, None)],
+            generic_params=[],
+            parent_class=parent_classlike,
+            body_source=CodeAutoAccessorMethod(CodeAccessorKind.SET, field),
+        )
+        parent_classlike.methods_by_id[field.export_setter.id] = field.export_setter
+
     # print(f"Added field {classlike.name}.{field.name} of type {field_type.name}")
     return field
 

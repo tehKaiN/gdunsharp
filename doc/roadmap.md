@@ -48,12 +48,17 @@ Current level: **4**.
 
 - replace remaining c# system types with external types from godot-cpp
 - use proper include paths for godot includes
+- generate getter/setter for class fields
+- mark node-inheriting classes as godotic classes
+- add `_bind_methods()` and GDCLASS boilerplate for godotic classes
 - make sure stuff builds at all
 - read signal signatures
 - emit signal boilerplate
 
 ## Level 6 - usable
 
+- parse `Export` attribute for fields/properties
+- emit godot boilderplate only for Exported fields/properties
 - read method bodies
 - emit method bodies
 - read static methods
