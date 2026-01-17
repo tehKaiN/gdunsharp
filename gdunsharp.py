@@ -70,12 +70,15 @@ class CodeType(CodeIdentifier):
         self.replacement: CodeType | None = None
         self.parent_type_scope = parent_type_scope
         self.custom_include_path = ""
+        self.is_builtin = False
         parent_type_scope.types_by_id[id] = self
 
     def is_external(self) -> bool:
         raise NotImplementedError("CodeType.is_external()")
 
     def can_emit(self, emit_kind: CodeEmitKind) -> bool:
+        if self.is_builtin:
+            return False
         if emit_kind == CodeEmitKind.INCLUDE:
             return True
         return not self.is_external()
@@ -104,7 +107,11 @@ class CodeType(CodeIdentifier):
         if self.custom_include_path:
             return self.custom_include_path
         assert isinstance(self.parent_type_scope, CodeNamespace)
-        return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
+        path = self.parent_type_scope.get_directory_path()
+        if path:
+            path += "/"
+        path += f"{camel_to_snake(self.name)}.hpp"
+        return path
 
 
 class VariantInfo:
@@ -1295,9 +1302,12 @@ def load_external_types(codebase: Codebase):
         extern.is_external_type = True
         return extern
 
-    def make_external_class(name, namespace) -> CodeClass:
+    def make_external_class(
+        name: str, namespace: CodeNamespace, is_builtin: bool = False
+    ) -> CodeClass:
         extern = CodeClass(name, CodeClassKind.CLASS, [], namespace)
         extern.is_external_type = True
+        extern.is_builtin = is_builtin
         return extern
 
     def make_godot_class(
@@ -1407,12 +1417,12 @@ def load_external_types(codebase: Codebase):
     make_godot_class("Vector2", ns_godotsharp, ns_godotcpp)
     make_godot_class("Vector3", ns_godotsharp, ns_godotcpp)
 
-    make_external_class("bool", codebase.global_namespace)
-    make_external_class("float", codebase.global_namespace)
-    make_external_class("double", codebase.global_namespace)
-    make_external_class("int", codebase.global_namespace)
-    make_external_class("string", codebase.global_namespace)
-    make_external_class("void", codebase.global_namespace)
+    make_external_class("bool", codebase.global_namespace, is_builtin=True)
+    make_external_class("float", codebase.global_namespace, is_builtin=True)
+    make_external_class("double", codebase.global_namespace, is_builtin=True)
+    make_external_class("int", codebase.global_namespace, is_builtin=True)
+    make_external_class("string", codebase.global_namespace, is_builtin=True)
+    make_external_class("void", codebase.global_namespace, is_builtin=True)
 
 
 print("Parsing C# files...")

@@ -51,14 +51,16 @@ Current level: **4**.
 - generate getter/setter for class fields
 - mark node-inheriting classes as godotic classes
 - add `_bind_methods()` and GDCLASS boilerplate for godotic classes
+- parse `Export` attribute for fields
+- emit godot boilderplate only for `Export`ed fields
 - make sure stuff builds at all
 - read signal signatures
 - emit signal boilerplate
 
 ## Level 6 - usable
 
-- parse `Export` attribute for fields/properties
-- emit godot boilderplate only for Exported fields/properties
+- parse `Export` attribute for properties
+- emit godot boilderplate only for `Export`ed properties
 - read method bodies
 - emit method bodies
 - read static methods
