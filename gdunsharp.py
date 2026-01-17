@@ -864,9 +864,18 @@ def get_type_from_node(
 def create_class_field(
     parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
 ) -> CodeField:
-    declaration_node = find_node_by_grammar_name(
-        node, NodeKind.VARIABLE_DECLARATION.value
-    )
+    is_export = False
+    for child_node in node.named_children:
+        if child_node.grammar_name == NodeKind.VARIABLE_DECLARATION.value:
+            declaration_node = child_node
+        elif child_node.grammar_name == "attribute_list":
+            for attribute_node in child_node.named_children:
+                assert attribute_node.grammar_name == "attribute"
+                attribute_identifier = attribute_node.named_children[0]
+                assert attribute_identifier.grammar_name == NodeKind.IDENTIFIER.value
+                if attribute_identifier.text == b"Export":
+                    is_export = True
+
     assert declaration_node
     type_node = declaration_node.named_children[0]
     declarator_node = declaration_node.named_children[1]
@@ -882,8 +891,7 @@ def create_class_field(
     field = CodeField(field_name, field_type)
     parent_classlike.fields_by_id[field.name] = field
 
-    # TODO: scan attributes, check for "Export" in attributes
-    if True:
+    if is_export:
         field.export_getter = CodeMethod(
             f"get_{field_name}",
             field_type,
