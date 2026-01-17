@@ -441,7 +441,7 @@ class CodeClass(CodeType, CodeTypeScope):
 
 
 class CodeEnumEntry(CodeIdentifier):
-    def __init__(self, name: str, value: str | None):
+    def __init__(self, name: str, value: str):
         super().__init__(name)
         self.value = value
 
@@ -720,11 +720,15 @@ def parse_enum_declaration_list(enum: CodeEnum, declaration_list_node: Node):
         name_node = member_declaration.named_children[0]
         assert name_node.grammar_name == NodeKind.IDENTIFIER.value
         assert name_node.text
-        value_text: str | None = None
+        value_text: str
         if len(member_declaration.named_children) > 1:
             value_node = member_declaration.named_children[1]
             assert value_node.text
             value_text = value_node.text.decode()
+        else:
+            value_text = str(
+                (int(enum.entries[-1].value, base=0) + 1) if len(enum.entries) else 0
+            )
         enum.entries.append(CodeEnumEntry(name_node.text.decode(), value_text))
 
 
