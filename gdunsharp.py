@@ -107,6 +107,30 @@ class CodeType(CodeIdentifier):
         return f"{self.parent_type_scope.get_directory_path()}/{camel_to_snake(self.name)}.hpp"
 
 
+class VariantInfo:
+    def __init__(self, type: CodeType):
+        self.property_hint_enum = "PROPERTY_HINT_NONE"
+        self.property_hint_value = ""
+
+        match type.name:
+            case "int" | "bool" | "string" | "float" | "Color":
+                self.type_enum = f"Variant::{type.name.upper()}"
+                return
+
+        if isinstance(type, CodeEnum):
+            self.type_enum = "Variant::INT"
+            self.property_hint_enum = "PROPERTY_HINT_ENUM"
+            self.property_hint_value = ", ".join(
+                [f"{entry.name}:{entry.value}" for entry in type.entries]
+            )
+        elif isinstance(type, CodeClass) and type.is_godotic:
+            self.type_enum = "Variant::OBJECT"
+            self.godot_class_name = type.name
+            return
+        else:
+            self.type_enum = "Variant::NIL"
+
+
 class CodeTypeScope:
     def __init__(self: CodeTypeScope, parent: CodeTypeScope | None):
         self.types_by_id: dict[str, CodeType] = {}
@@ -419,6 +443,43 @@ class CodeClass(CodeType, CodeTypeScope):
         out += "\n"
 
         out += f"}};\n\n"
+
+        if self.is_godotic:
+            # Not really a method since fully generated
+            out += f"void {self.name}::_bind_methods() {{\n"
+            for method in self.methods_by_id.values():
+                if len(method.params):
+                    param_list = ", ".join(f'"{param.name}"' for param in method.params)
+                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}", {param_list}), &{self.name}::{method.name});\n'
+                else:
+                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}"), &{self.name}::{method.name});\n'
+            out += "\n"
+
+            for property in self.properties_by_id.values():
+                setter_name = (
+                    property.setter.name
+                    if isinstance(property.setter, CodeMethod)
+                    else ""
+                )
+                assert isinstance(property.getter, CodeMethod)
+                getter_name = property.getter.name
+                variant_info = VariantInfo(property.type)
+                out += f'\tADD_PROPERTY(PropertyInfo({variant_info.type_enum}, "{property.name}", {variant_info.property_hint_enum}, "{variant_info.property_hint_value}"), "{setter_name}", "{getter_name}");\n'
+            out += "\n"
+
+            for field in self.fields_by_id.values():
+                if field.export_getter:
+                    assert field.export_setter
+                    getter_name = field.export_getter.name
+                    setter_name = field.export_setter.name
+                    variant_info = VariantInfo(field.type)
+                    out += f'\tADD_PROPERTY(PropertyInfo({variant_info.type_enum}, "{field.name}", {variant_info.property_hint_enum}, "{variant_info.property_hint_value}"), "{setter_name}", "{getter_name}");\n'
+            out += "\n"
+
+            # TODO: BIND_ENUM_CONSTANT for accessing enum values from gdscript
+
+            out += "}\n"
+            out += "\n"
 
         for method in self.methods_by_id.values():
             definition_lines = method.get_definition().splitlines()
