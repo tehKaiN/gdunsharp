@@ -37,3 +37,19 @@ The code translation works as follows:
 
 This project is far from complete. See [Roadmap](doc/roadmap.md).
 
+## Note about license
+
+The project is in its infancy and to ensure its development the software is licensed under Mozilla Public License 2.0.
+This means that any changes to MPLed file must be made public (preferrably in Pull Request to this repo).
+
+This **does not** mean that using this project relicenses your game code under MPL - it stays under whatever license you are using.
+The only exception is copying part of MPL code to your project file - this file automatically would become MPLed.
+
+Complying with license in your game is as simple as putting a notice similar to following in easily-accessible place accessible by a player, e.g. next to Godot license:
+
+```
+This game uses GdUnsharp - its source code is available on https://github.com/tehKaiN/GdUnsharp
+```
+
+If the project matures enough or gains opportunity to integrate with larger project, e.g. Godot itself, I might relicense it something more fitting and permissive like BSD or MIT.
+By contributing a PR to this repo, you understand that and allow me to do so with your changes in the future.
