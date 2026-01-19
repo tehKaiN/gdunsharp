@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 import os
+import shutil
 import glob
 from enum import Enum
 import tree_sitter_c_sharp
@@ -1292,11 +1293,8 @@ def consolidate_class_usings(codebase: Codebase):
 
 def prepare_out_directory(out_path: str):
     if os.path.exists(out_path):
-        old_out_files = glob.glob(f"{out_path}/**/*.cs")
-        for f in old_out_files:
-            os.remove(f)
-    else:
-        os.makedirs(out_path, exist_ok=True)
+        shutil.rmtree(out_path)
+    os.makedirs(out_path, exist_ok=True)
 
 
 def load_external_types(codebase: Codebase):
