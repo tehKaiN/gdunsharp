@@ -581,7 +581,11 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         return dir_path
 
     def get_header_path(self) -> str:
-        return f"{self.get_directory_path()}/namespace.hpp"
+        path = self.get_directory_path()
+        if self.name:
+            path += "/"
+        path += "namespace.hpp"
+        return path
 
     def get_all_types(self) -> list[CodeType]:
         types = []
