@@ -359,6 +359,12 @@ class CodeClass(CodeType, CodeTypeScope):
 
         self.contexts: list[ClassNodeContext] = []
 
+    def get_base_class(self) -> CodeClass | None:
+        for base in self.bases:
+            if isinstance(base, CodeClass):
+                return base
+        return None
+
     def add_base_nodes(
         self,
         base_nodes: list[Node],
