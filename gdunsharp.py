@@ -244,7 +244,8 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         if self.virtual_kind != CodeVirtualKind.PURE:
             assert isinstance(self.parent, CodeClass)
             out += f"{self.return_type.name} {self.parent.name}::{self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
-
+            if self.return_type.id != "void":
+                out += "\treturn {};\n"
             out += f"}}"
         return out
 

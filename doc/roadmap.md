@@ -53,7 +53,9 @@ Current level: **4**.
 - add `_bind_methods()` and GDCLASS boilerplate for godotic classes
 - parse `Export` attribute for fields
 - emit godot boilderplate only for `Export`ed fields
-- make sure stuff builds at all
+- upgrade ref-types to using `Ref<>` generics
+- add dummy return statements for non-void-returning methods
+- make stuff build at all as an engine module
 - read signal signatures
 - emit signal boilerplate
 
@@ -67,7 +69,6 @@ Current level: **4**.
 - resolve extension methods
 - resolve generic parameters in class
 - resolve generic parameters in methods
-- build as engine module
 - build as GDExtension
 
 ## Future
