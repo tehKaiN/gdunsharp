@@ -429,7 +429,7 @@ class CodeClass(CodeType, CodeTypeScope):
             template_decl += "\n"
         out += f"{template_decl}class {self.name}"
         if len(self.bases):
-            out += f": {', '.join([b.name for b in self.bases])} "
+            out += f": public {', '.join([b.name for b in self.bases])} "
         out += f"{{\n"
 
         if self.is_godotic:
