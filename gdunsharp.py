@@ -54,6 +54,8 @@ class NodeKind(Enum):
     ARROW_EXPRESSION = "arrow_expression_clause"
     BASE_LIST = "base_list"
     MODIFIER = "modifier"
+    ATTRIBUTE_LIST = "attribute_list"
+    ATTRIBUTE = "attribute"
 
 
 class CodeEmitKind(Enum):
@@ -70,12 +72,19 @@ class CodeIdentifier:
 
 
 class CodeType(CodeIdentifier):
-    def __init__(self, name: str, id: str, parent_type_scope: CodeTypeScope):
+    def __init__(
+        self,
+        name: str,
+        id: str,
+        is_ref: bool,
+        parent_type_scope: CodeTypeScope,
+    ):
         super().__init__(name, id)
         self.replacement: CodeType | None = None
         self.parent_type_scope = parent_type_scope
         self.custom_include_path = ""
         self.is_builtin = False
+        self.is_ref = is_ref
         parent_type_scope.types_by_id[id] = self
 
     def is_external(self) -> bool:
@@ -118,6 +127,9 @@ class CodeType(CodeIdentifier):
         path += f"{camel_to_snake(self.name)}.hpp"
         return path
 
+    def get_expression(self) -> str:
+        return f"Ref<{self.name}>" if self.is_ref else self.name
+
 
 class VariantInfo:
     def __init__(self, type: CodeType):
@@ -153,7 +165,10 @@ class CodeTypeScope:
 class CodeNullableType(CodeType):
     def __init__(self, base_type):
         super().__init__(
-            base_type.name + "?", base_type.id + "?", base_type.parent_type_scope
+            base_type.name + "?",
+            base_type.id + "?",
+            is_ref=base_type.is_ref,
+            parent_type_scope=base_type.parent_type_scope,
         )
         self.base_type = base_type
         # print(f"Found nullable type {self.name}")
@@ -166,8 +181,13 @@ class CodeNullableType(CodeType):
 
 
 class ExternalType(CodeType):
-    def __init__(self, name: str, parent_type_scope: CodeTypeScope):
-        super().__init__(name=name, id=name, parent_type_scope=parent_type_scope)
+    def __init__(self, name: str, is_ref: bool, parent_type_scope: CodeTypeScope):
+        super().__init__(
+            name=name,
+            id=name,
+            is_ref=is_ref,
+            parent_type_scope=parent_type_scope,
+        )
 
     def is_external(self):
         return True
@@ -230,7 +250,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
             out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
         if self.virtual_kind in [CodeVirtualKind.VIRTUAL, CodeVirtualKind.PURE]:
             out += "virtual "
-        out += f"{self.return_type.name} {self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])})"
+        out += f"{self.return_type.get_expression()} {self.name}({', '.join([f'{p.type.get_expression()} {p.name}' for p in self.params])})"
         if self.virtual_kind == CodeVirtualKind.PURE:
             out += " = 0"
         elif self.virtual_kind == CodeVirtualKind.OVERRIDE:
@@ -245,36 +265,42 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
 
         if self.virtual_kind != CodeVirtualKind.PURE:
             assert isinstance(self.parent, CodeClass)
-            out += f"{self.return_type.name} {self.parent.name}::{self.name}({', '.join([f'{p.type.name} {p.name}' for p in self.params])}) {{\n"
+            out += f"{self.return_type.get_expression()} {self.parent.name}::{self.name}({', '.join([f'{p.type.get_expression()} {p.name}' for p in self.params])}) {{\n"
             if self.return_type.id != "void":
                 out += "\treturn {};\n"
             out += f"}}"
         return out
 
 
+# TODO: unify with CodeVariable?
 class CodeField(CodeIdentifier):
     def __init__(self, name: str, type: CodeType):
         super().__init__(name)
         self.type = type
-        self.export_getter: CodeMethod | None = None
-        self.export_setter: CodeMethod | None = None
 
     def get_declaration(self) -> str:
-        return f"{self.type.name} {self.name};"
+        return f"{self.type.get_expression()} {self.name};"
 
 
+# 3 types of properties:
+# T Foo - custom field with auto accessors
+# T Foo { get; set; } - auto field with auto accessors
+# T Foo => ... - no field, custom accessors
 class CodeProperty(CodeIdentifier):
     def __init__(
         self,
         name: str,
         type: CodeType,
-        getter: CodeMethod | None,
-        setter: CodeMethod | None,
+        is_export: bool,
+        getter: CodeMethod,
+        setter: CodeMethod | None = None,
     ):
         super().__init__(name)
+        # TODO: self.field as CodeVariable
         self.type = type
         self.setter = setter
         self.getter = getter
+        self.is_export = is_export
 
 
 class CodeClassKind(Enum):
@@ -285,10 +311,11 @@ class CodeClassKind(Enum):
 
 class CodeClassSpecialized(CodeType):
     def __init__(self, generic_class: CodeClass, type_params: list[CodeType]):
-        name = f"{generic_class.name}<{', '.join(t.name for t in type_params)}>"
+        name = f"{generic_class.name}<{', '.join(t.get_expression() for t in type_params)}>"
         super().__init__(
             name=name,
             id=name,
+            is_ref=True,
             parent_type_scope=generic_class.parent_type_scope,
         )
         self.generic_class = generic_class
@@ -318,7 +345,7 @@ class ClassNodeContext:
 
 class CodeGenericParameter(CodeType):
     def __init__(self, name: str, parent_scope: CodeTypeScope):
-        super().__init__(name, name, parent_scope)
+        super().__init__(name, name, is_ref=False, parent_type_scope=parent_scope)
 
     def is_external(self) -> bool:
         return False
@@ -341,7 +368,13 @@ class CodeClass(CodeType, CodeTypeScope):
         parent_namespace: CodeNamespace,
     ):
         id = CodeClass.get_id(name, len(generic_parameter_names))
-        CodeType.__init__(self, name, id, parent_namespace)
+        CodeType.__init__(
+            self,
+            name,
+            id,
+            is_ref=True,
+            parent_type_scope=parent_namespace,
+        )
         CodeTypeScope.__init__(self, parent_namespace)
 
         self.kind = kind
@@ -453,8 +486,6 @@ class CodeClass(CodeType, CodeTypeScope):
 
         out += "public:\n"
 
-        # TODO: Ref<>
-
         for field in self.fields_by_id.values():
             out += f"\t{field.get_declaration()}\n"
         out += "\n"
@@ -491,15 +522,6 @@ class CodeClass(CodeType, CodeTypeScope):
                 out += f'\tADD_PROPERTY(PropertyInfo({variant_info.type_enum}, "{property.name}", {variant_info.property_hint_enum}, "{variant_info.property_hint_value}"), "{setter_name}", "{getter_name}");\n'
             out += "\n"
 
-            for field in self.fields_by_id.values():
-                if field.export_getter:
-                    assert field.export_setter
-                    getter_name = field.export_getter.name
-                    setter_name = field.export_setter.name
-                    variant_info = VariantInfo(field.type)
-                    out += f'\tADD_PROPERTY(PropertyInfo({variant_info.type_enum}, "{field.name}", {variant_info.property_hint_enum}, "{variant_info.property_hint_value}"), "{setter_name}", "{getter_name}");\n'
-            out += "\n"
-
             # TODO: BIND_ENUM_CONSTANT for accessing enum values from gdscript
 
             out += "}\n"
@@ -533,7 +555,9 @@ class CodeEnumEntry(CodeIdentifier):
 
 class CodeEnum(CodeType):
     def __init__(self, name: str, parent_namespace: CodeNamespace):
-        super().__init__(name=name, id=name, parent_type_scope=parent_namespace)
+        super().__init__(
+            name=name, id=name, is_ref=False, parent_type_scope=parent_namespace
+        )
         self.entries: list[CodeEnumEntry] = []
 
     def is_external(self):
@@ -1014,7 +1038,11 @@ def get_type_from_node(
             resolved_type = codebase.resolve_type(type_id, namespaces, parent_scope)
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
-                resolved_type = ExternalType(type_id, parent_scope)
+                resolved_type = ExternalType(
+                    type_id,
+                    is_ref=True,
+                    parent_type_scope=parent_scope,
+                )
             type = resolved_type
 
         case NodeKind.NULLABLE_TYPE.value:
@@ -1029,6 +1057,39 @@ def get_type_from_node(
     return type
 
 
+def create_property_for_field(
+    field: CodeField, parent_classlike: CodeClass, namespaces: list[CodeNamespace]
+) -> CodeProperty:
+    getter = CodeMethod(
+        f"get_{field.name}",
+        field.type,
+        params=[],
+        generic_params=[],
+        parent_class=parent_classlike,
+        body_source=CodeAutoAccessorMethod(CodeAccessorKind.GET, field),
+    )
+    parent_classlike.methods_by_id[getter.id] = getter
+
+    void_type = codebase.resolve_type("void", namespaces, parent_classlike)
+    assert void_type
+    setter = CodeMethod(
+        f"set_{field.name}",
+        void_type,
+        params=[CodeParam("value", field.type, None)],
+        generic_params=[],
+        parent_class=parent_classlike,
+        body_source=CodeAutoAccessorMethod(CodeAccessorKind.SET, field),
+    )
+    parent_classlike.methods_by_id[setter.id] = setter
+
+    property = CodeProperty(
+        field.name, field.type, is_export=True, getter=getter, setter=setter
+    )
+    parent_classlike.properties_by_id[property.id] = property
+
+    return property
+
+
 def create_class_field(
     parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
 ) -> CodeField:
@@ -1036,9 +1097,9 @@ def create_class_field(
     for child_node in node.named_children:
         if child_node.grammar_name == NodeKind.VARIABLE_DECLARATION.value:
             declaration_node = child_node
-        elif child_node.grammar_name == "attribute_list":
+        elif child_node.grammar_name == NodeKind.ATTRIBUTE_LIST.value:
             for attribute_node in child_node.named_children:
-                assert attribute_node.grammar_name == "attribute"
+                assert attribute_node.grammar_name == NodeKind.ATTRIBUTE.value
                 attribute_identifier = attribute_node.named_children[0]
                 assert attribute_identifier.grammar_name == NodeKind.IDENTIFIER.value
                 if attribute_identifier.text == b"Export":
@@ -1057,32 +1118,11 @@ def create_class_field(
     assert name_node.text
     field_name = name_node.text.decode()
     field = CodeField(field_name, field_type)
-    parent_classlike.fields_by_id[field.name] = field
+    parent_classlike.fields_by_id[field.id] = field
 
     if is_export:
-        field.export_getter = CodeMethod(
-            f"get_{field_name}",
-            field_type,
-            params=[],
-            generic_params=[],
-            parent_class=parent_classlike,
-            body_source=CodeAutoAccessorMethod(CodeAccessorKind.GET, field),
-        )
-        parent_classlike.methods_by_id[field.export_getter.id] = field.export_getter
+        create_property_for_field(field, parent_classlike, namespaces)
 
-        void_type = codebase.resolve_type("void", namespaces, parent_classlike)
-        assert void_type
-        field.export_setter = CodeMethod(
-            f"set_{field_name}",
-            void_type,
-            params=[CodeParam("value", field_type, None)],
-            generic_params=[],
-            parent_class=parent_classlike,
-            body_source=CodeAutoAccessorMethod(CodeAccessorKind.SET, field),
-        )
-        parent_classlike.methods_by_id[field.export_setter.id] = field.export_setter
-
-    # print(f"Added field {classlike.name}.{field.name} of type {field_type.name}")
     return field
 
 
@@ -1093,8 +1133,18 @@ def create_class_property(
     name_node: Node | None = None
     getter_body: Node | CodeAutoAccessorMethod | None = None
     setter_body: Node | CodeAutoAccessorMethod | None = None
+    is_export = False
     for child_node in node.named_children:
         match child_node.grammar_name:
+            case NodeKind.ATTRIBUTE_LIST.value:
+                for attribute_node in child_node.named_children:
+                    assert attribute_node.grammar_name == NodeKind.ATTRIBUTE.value
+                    attribute_identifier = attribute_node.named_children[0]
+                    assert (
+                        attribute_identifier.grammar_name == NodeKind.IDENTIFIER.value
+                    )
+                    if attribute_identifier.text == b"Export":
+                        is_export = True
             case NodeKind.TUPLE_TYPE.value:
                 raise Exception("Tuple types aren't supported")
             case (
@@ -1173,7 +1223,7 @@ def create_class_property(
     )
     parent_class.methods_by_id[setter.id] = setter
 
-    property = CodeProperty(property_name, property_type, getter, setter)
+    property = CodeProperty(property_name, property_type, is_export, getter, setter)
     parent_class.properties_by_id[property.id] = property
     return property
 
@@ -1421,11 +1471,12 @@ def load_external_types(codebase: Codebase):
         return extern
 
     def make_external_class(
-        name: str, namespace: CodeNamespace, is_builtin: bool = False
+        name: str, namespace: CodeNamespace, is_builtin: bool = False, is_ref=True
     ) -> CodeClass:
         extern = CodeClass(name, CodeClassKind.CLASS, [], namespace)
         extern.is_external_type = True
         extern.is_builtin = is_builtin
+        extern.is_ref = is_ref
         return extern
 
     def make_godot_class(
@@ -1566,12 +1617,22 @@ def load_external_types(codebase: Codebase):
     make_godot_class("Vector2", ns_godotsharp, ns_godotcpp, "core/math/vector2.h")
     make_godot_class("Vector3", ns_godotsharp, ns_godotcpp, "core/math/vector3.h")
 
-    make_external_class("bool", codebase.global_namespace, is_builtin=True)
-    make_external_class("float", codebase.global_namespace, is_builtin=True)
-    make_external_class("double", codebase.global_namespace, is_builtin=True)
-    make_external_class("int", codebase.global_namespace, is_builtin=True)
-    make_external_class("string", codebase.global_namespace, is_builtin=True)
-    make_external_class("void", codebase.global_namespace, is_builtin=True)
+    make_external_class(
+        "bool", codebase.global_namespace, is_builtin=True, is_ref=False
+    )
+    make_external_class(
+        "float", codebase.global_namespace, is_builtin=True, is_ref=False
+    )
+    make_external_class(
+        "double", codebase.global_namespace, is_builtin=True, is_ref=False
+    )
+    make_external_class("int", codebase.global_namespace, is_builtin=True, is_ref=False)
+    make_external_class(
+        "string", codebase.global_namespace, is_builtin=True, is_ref=False
+    )
+    make_external_class(
+        "void", codebase.global_namespace, is_builtin=True, is_ref=False
+    )
 
 
 project_name = "gdfire"
