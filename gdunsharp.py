@@ -35,6 +35,7 @@ class NodeKind(Enum):
     FIELD_DECLARATION = "field_declaration"
     METHOD_DECLARATION = "method_declaration"
     PROPERTY_DECLARATION = "property_declaration"
+    DELEGATE_DECLARATION = "delegate_declaration"
     USING_DIRECTIVE = "using_directive"
     PREDEFINED_TYPE = "predefined_type"
     NULLABLE_TYPE = "nullable_type"
@@ -131,6 +132,25 @@ class CodeType(CodeIdentifier):
         return f"Ref<{self.name}>" if self.is_ref else self.name
 
 
+class CodeDelegate(CodeType):
+    def __init__(
+        self,
+        name,
+        params: list[CodeParam],
+        return_type: CodeType,
+        is_signal: bool,
+        parent_type_scope,
+    ):
+        super().__init__(name, name, is_ref=True, parent_type_scope=parent_type_scope)
+        self.params = params
+        self.return_type = return_type
+        self.is_signal = is_signal
+
+    def get_signal_name(self) -> str:
+        assert self.is_signal
+        return self.name.removesuffix("EventHandler")
+
+
 class VariantInfo:
     def __init__(self, type: CodeType):
         self.property_hint_enum = "PROPERTY_HINT_NONE"
@@ -150,10 +170,15 @@ class VariantInfo:
         elif isinstance(type, CodeClass) and type.is_godotic:
             self.type_enum = "Variant::OBJECT"
             # TODO: PROPERTY_HINT_RESOURCE_TYPE, "PackedScene" for PackedScene, etc
+            self.property_hint_enum = "PROPERTY_HINT_RESOURCE_TYPE"
+            self.property_hint_value = type.name
             self.godot_class_name = type.name
             return
         else:
             self.type_enum = "Variant::NIL"
+
+    def get_property_info(self, name: str) -> str:
+        return f'PropertyInfo({self.type_enum}, "{name}", {self.property_hint_enum}, "{self.property_hint_value}")'
 
 
 class CodeTypeScope:
@@ -199,6 +224,9 @@ class CodeParam(CodeIdentifier):
         self.type = type
         self.default_value = default_value
 
+    def get_declaration(self) -> str:
+        return f"{self.type.get_expression()} {self.name}"
+
 
 class CodeVirtualKind(Enum):
     NONE = 0
@@ -240,6 +268,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         self.virtual_kind = CodeVirtualKind.NONE
         self.params = params
         self.body_source = body_source
+        self.is_node_virtual = False
 
         for generic_param in generic_params:
             self.types_by_id[generic_param.id] = generic_param
@@ -250,7 +279,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
             out += f"template<{', '.join(f'typename {t}' for t in self.types_by_id)}>\n"
         if self.virtual_kind in [CodeVirtualKind.VIRTUAL, CodeVirtualKind.PURE]:
             out += "virtual "
-        out += f"{self.return_type.get_expression()} {self.name}({', '.join([f'{p.type.get_expression()} {p.name}' for p in self.params])})"
+        out += f"{self.return_type.get_expression()} {self.name}({', '.join([f'{p.get_declaration()}' for p in self.params])})"
         if self.virtual_kind == CodeVirtualKind.PURE:
             out += " = 0"
         elif self.virtual_kind == CodeVirtualKind.OVERRIDE:
@@ -384,6 +413,7 @@ class CodeClass(CodeType, CodeTypeScope):
         self.properties_by_id: dict[str, CodeProperty] = {}
         self.fields_by_id: dict[str, CodeField] = {}
         self.methods_by_id: dict[str, CodeMethod] = {}
+        self.delegates_by_id: dict[str, CodeDelegate] = {}
         self.usings: list[CodeNamespace] = []
         self.bases: list[CodeType] = (
             []
@@ -435,6 +465,62 @@ class CodeClass(CodeType, CodeTypeScope):
         return f"{template_decl}class {self.name};"
 
     def get_header_contents(self) -> str:
+        def emit_method_bind_methods() -> str:
+            out = f"void {self.name}::_bind_methods() {{\n"
+            for method in self.methods_by_id.values():
+                if method.is_node_virtual:
+                    out += "//"
+                if len(method.params):
+                    param_list = ", ".join(f'"{param.name}"' for param in method.params)
+                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}", {param_list}), &{self.name}::{method.name});\n'
+                else:
+                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}"), &{self.name}::{method.name});\n'
+            out += "\n"
+
+            for property in self.properties_by_id.values():
+                setter_name = (
+                    property.setter.name
+                    if isinstance(property.setter, CodeMethod)
+                    else ""
+                )
+                assert isinstance(property.getter, CodeMethod)
+                getter_name = property.getter.name
+                variant_info = VariantInfo(property.type)
+                out += f'\tADD_PROPERTY({variant_info.get_property_info(property.name)}, "{setter_name}", "{getter_name}");\n'
+            out += "\n"
+
+            signal_delegates = [d for d in self.delegates_by_id.values() if d.is_signal]
+            for delegate in signal_delegates:
+                param_infos: list[str] = []
+                for param in delegate.params:
+                    param_variant_info = VariantInfo(param.type)
+                    param_infos.append(param_variant_info.get_property_info(param.name))
+                param_infos_str = ", ".join(param_infos)
+                signal_name = delegate.get_signal_name()
+                if len(param_infos_str):
+                    out += f'\tADD_SIGNAL(MethodInfo("{signal_name}", {param_infos_str}));\n'
+                else:
+                    out += f'\tADD_SIGNAL(MethodInfo("{signal_name}"));\n'
+            out += "\n"
+
+            # TODO: BIND_ENUM_CONSTANT for accessing enum values from gdscript
+
+            out += f"}}\n\n"
+            return out
+
+        def emit_signal_method(delegate: CodeDelegate) -> str:
+            if len(delegate.params):
+                method_params = ", ".join(p.get_declaration() for p in delegate.params)
+                call_params = ", " + ", ".join(p.name for p in delegate.params)
+            else:
+                method_params = ""
+                call_params = ""
+
+            out = f"void EmitSignal{delegate.get_signal_name()}({method_params}) {{\n"
+            out += f"\temit_signal(SNAME({delegate.get_signal_name()}){call_params})\n"
+            out += f"}}\n\n"
+            return out
+
         assert isinstance(self.parent_type_scope, CodeNamespace)
 
         out = "#pragma once\n\n"
@@ -486,6 +572,11 @@ class CodeClass(CodeType, CodeTypeScope):
 
         out += "public:\n"
 
+        for delegate in self.delegates_by_id.values():
+            param_list = ", ".join([p.get_declaration() for p in delegate.params])
+            out += f"\tusing {delegate.name} = {delegate.return_type.get_expression()} (*)({param_list});\n"
+        out += "\n"
+
         for field in self.fields_by_id.values():
             out += f"\t{field.get_declaration()}\n"
         out += "\n"
@@ -499,33 +590,11 @@ class CodeClass(CodeType, CodeTypeScope):
 
         if self.is_godotic:
             # Not really a method since fully generated
-            out += f"void {self.name}::_bind_methods() {{\n"
-            for method in self.methods_by_id.values():
-                if method.virtual_kind != CodeVirtualKind.NONE:
-                    out += "//"
-                if len(method.params):
-                    param_list = ", ".join(f'"{param.name}"' for param in method.params)
-                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}", {param_list}), &{self.name}::{method.name});\n'
-                else:
-                    out += f'\tClassDB::bind_method(D_METHOD("{method.name}"), &{self.name}::{method.name});\n'
-            out += "\n"
+            out += emit_method_bind_methods()
 
-            for property in self.properties_by_id.values():
-                setter_name = (
-                    property.setter.name
-                    if isinstance(property.setter, CodeMethod)
-                    else ""
-                )
-                assert isinstance(property.getter, CodeMethod)
-                getter_name = property.getter.name
-                variant_info = VariantInfo(property.type)
-                out += f'\tADD_PROPERTY(PropertyInfo({variant_info.type_enum}, "{property.name}", {variant_info.property_hint_enum}, "{variant_info.property_hint_value}"), "{setter_name}", "{getter_name}");\n'
-            out += "\n"
-
-            # TODO: BIND_ENUM_CONSTANT for accessing enum values from gdscript
-
-            out += "}\n"
-            out += "\n"
+            signal_delegates = [d for d in self.delegates_by_id.values() if d.is_signal]
+            for delegate in signal_delegates:
+                out += emit_signal_method(delegate)
 
         for method in self.methods_by_id.values():
             definition_lines = method.get_definition().splitlines()
@@ -1090,6 +1159,57 @@ def create_property_for_field(
     return property
 
 
+def create_class_delegate(
+    parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
+) -> CodeDelegate:
+    is_signal = False
+    for child_node in node.named_children:
+        match child_node.grammar_name:
+            case (
+                NodeKind.PREDEFINED_TYPE.value
+                | NodeKind.ARRAY_TYPE.value
+                | NodeKind.GENERIC_NAME.value
+                | NodeKind.NULLABLE_TYPE.value
+            ):
+                return_type_node = child_node
+            case NodeKind.IDENTIFIER.value:
+                if not return_type_node:
+                    # identifier is a custom type
+                    return_type_node = child_node
+                else:
+                    name_node = child_node
+            case NodeKind.PARAM_LIST.value:
+                params_node = child_node
+            case NodeKind.ATTRIBUTE_LIST.value:
+                for attribute_node in child_node.named_children:
+                    assert attribute_node.grammar_name == NodeKind.ATTRIBUTE.value
+                    attribute_identifier = attribute_node.named_children[0]
+                    assert (
+                        attribute_identifier.grammar_name == NodeKind.IDENTIFIER.value
+                    )
+                    if attribute_identifier.text == b"Signal":
+                        is_signal = True
+
+    assert name_node
+    assert params_node
+    assert return_type_node
+    assert name_node.text
+
+    delegate_name = name_node.text.decode()
+    params = parse_params_from_node(params_node, namespaces, parent_classlike)
+    return_type = get_type_from_node(
+        codebase, return_type_node, namespaces, parent_classlike
+    )
+
+    delegate = CodeDelegate(
+        delegate_name, params, return_type, is_signal, parent_classlike
+    )
+    parent_classlike.delegates_by_id[delegate.id] = delegate
+
+    print(f"got delegate {delegate_name} in class {parent_classlike.name}")
+    return delegate
+
+
 def create_class_field(
     parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
 ) -> CodeField:
@@ -1228,6 +1348,42 @@ def create_class_property(
     return property
 
 
+def parse_params_from_node(
+    params_node: Node, namespaces: list[CodeNamespace], parent_scope: CodeTypeScope
+) -> list[CodeParam]:
+    params: list[CodeParam] = []
+    for param_node in params_node.named_children:
+        assert param_node.grammar_name == NodeKind.PARAM.value
+        param_type_node: Node | None = None
+        param_name_node: Node | None = None
+        for param_child_node in param_node.named_children:
+            if param_child_node.grammar_name == NodeKind.TUPLE_TYPE.value:
+                raise Exception("Tuple types aren't supported")
+            if param_child_node.grammar_name in [
+                NodeKind.PREDEFINED_TYPE.value,
+                NodeKind.ARRAY_TYPE.value,
+                NodeKind.GENERIC_NAME.value,
+            ]:
+                param_type_node = param_child_node
+            elif param_child_node.grammar_name == NodeKind.IDENTIFIER.value:
+                if not param_type_node:
+                    # identifier is a custom type
+                    param_type_node = param_child_node
+                else:
+                    param_name_node = param_child_node
+        assert param_type_node
+        param_type = get_type_from_node(
+            codebase, param_type_node, namespaces, parent_scope
+        )
+
+        assert param_name_node
+        assert param_name_node.text
+        param_name = param_name_node.text.decode()
+        param = CodeParam(param_name, param_type, default_value=None)
+        params.append(param)
+    return params
+
+
 def create_class_method(
     parent_class: CodeClass,
     node: Node,
@@ -1282,36 +1438,7 @@ def create_class_method(
         codebase, return_type_node, namespaces, generic_method_scope
     )
 
-    params: list[CodeParam] = []
-    for param_node in params_node.named_children:
-        assert param_node.grammar_name == NodeKind.PARAM.value
-        param_type_node: Node | None = None
-        param_name_node: Node | None = None
-        for param_child_node in param_node.named_children:
-            if param_child_node.grammar_name == NodeKind.TUPLE_TYPE.value:
-                raise Exception("Tuple types aren't supported")
-            if param_child_node.grammar_name in [
-                NodeKind.PREDEFINED_TYPE.value,
-                NodeKind.ARRAY_TYPE.value,
-                NodeKind.GENERIC_NAME.value,
-            ]:
-                param_type_node = param_child_node
-            elif param_child_node.grammar_name == NodeKind.IDENTIFIER.value:
-                if not param_type_node:
-                    # identifier is a custom type
-                    param_type_node = param_child_node
-                else:
-                    param_name_node = param_child_node
-        assert param_type_node
-        param_type = get_type_from_node(
-            codebase, param_type_node, namespaces, generic_method_scope
-        )
-
-        assert param_name_node
-        assert param_name_node.text
-        param_name = param_name_node.text.decode()
-        param = CodeParam(param_name, param_type, default_value=None)
-        params.append(param)
+    params = parse_params_from_node(params_node, namespaces, generic_method_scope)
 
     generic_params: list[CodeGenericParameter] = []
     for generic_param in generic_method_scope.types_by_id.values():
@@ -1396,6 +1523,8 @@ def gather_class_elements(codebase: Codebase):
 
             for declaration_node in context.declaration_list_node.named_children:
                 match declaration_node.grammar_name:
+                    case NodeKind.DELEGATE_DECLARATION.value:
+                        create_class_delegate(classlike, declaration_node, namespaces)
                     case NodeKind.FIELD_DECLARATION.value:
                         create_class_field(classlike, declaration_node, namespaces)
                     case NodeKind.METHOD_DECLARATION.value:
@@ -1434,6 +1563,8 @@ def consolidate_class_usings(codebase: Codebase):
             # TODO: gather namespaces for types from method body
             pass
 
+        # TODO: same for delegates?
+
 
 def fix_godot_virtuals(codebase: Codebase):
     godotics = [
@@ -1445,6 +1576,7 @@ def fix_godot_virtuals(codebase: Codebase):
     for godotic in godotics:
         for method in godotic.methods_by_id.values():
             if method.id in gdsharp_method_names:
+                method.is_node_virtual = True
                 has_override_parent = False
                 base_class = godotic.get_base_class()
                 while base_class:

@@ -37,9 +37,7 @@ def print_tree_node(node: Node, prefix: str = "", is_last: bool = False):
 LANG_CSHARP = Language(tree_sitter_c_sharp.language())
 parser = Parser(LANG_CSHARP)
 
-file_bytes = (
-    open("test_scripts/gdfire\Piwnica\GdFire\PLayers\Player.cs").read().encode()
-)
+file_bytes = open("test_scripts/gdfire\Piwnica\GdFire\TurretTower.cs").read().encode()
 tree = parser.parse(file_bytes)
 
 print_tree_node(tree.root_node)

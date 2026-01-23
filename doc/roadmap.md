@@ -1,7 +1,7 @@
 # Roadmap
 
 Development is split across complexity levels.
-Current level: **4**.
+Current level: **5**.
 
 ## Level 1
 
@@ -53,31 +53,35 @@ Current level: **4**.
 - add `_bind_methods()` and GDCLASS boilerplate for godotic classes
 - parse `Export` attribute for fields
 - emit godot boilderplate only for `Export`ed fields
+- parse `Export` attribute for properties
+- emit godot boilderplate only for `Export`ed properties
 - upgrade ref-types to using `Ref<>` generics
 - add dummy return statements for non-void-returning methods
 - make stuff build at all as an engine module
 - read signal signatures
 - emit signal boilerplate
 
-## Level 6 - usable
+## Level 6 - usable in gdfire
 
-- parse `Export` attribute for properties
-- emit godot boilderplate only for `Export`ed properties
+- read nested types in classes
+- resolve nested types in classes
+- emit nested types
 - read method bodies
 - emit method bodies
 - read static methods
 - resolve extension methods
 - resolve generic parameters in class
 - resolve generic parameters in methods
-- build as GDExtension
 
-## Future
+## Level 7 - usable in MJR
 
-- read nested types in classes
-- resolve nested types in classes
-- emit nested types
 - `using Foo = Bar`
 - `async`/`await`
 - somehow support Newtonsoft.JSON
-- read scoped namespaces
 - replace `System.Collections.RegularExpressions.Regex` with CTRE
+
+## Future
+
+- read scoped namespaces
+- build as GDExtension
+- use lowered source code, sanitized for tree-sitter
