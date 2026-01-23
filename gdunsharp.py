@@ -269,6 +269,7 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         self.params = params
         self.body_source = body_source
         self.is_node_virtual = False
+        self.property: CodeProperty | None = None
 
         for generic_param in generic_params:
             self.types_by_id[generic_param.id] = generic_param
@@ -330,6 +331,10 @@ class CodeProperty(CodeIdentifier):
         self.setter = setter
         self.getter = getter
         self.is_export = is_export
+
+        self.getter.property = self
+        if self.setter:
+            self.setter.property = self
 
 
 class CodeClassKind(Enum):
@@ -468,6 +473,8 @@ class CodeClass(CodeType, CodeTypeScope):
         def emit_method_bind_methods() -> str:
             out = f"void {self.name}::_bind_methods() {{\n"
             for method in self.methods_by_id.values():
+                if method.property and not method.property.is_export:
+                    continue
                 if method.is_node_virtual:
                     out += "//"
                 if len(method.params):
@@ -478,6 +485,8 @@ class CodeClass(CodeType, CodeTypeScope):
             out += "\n"
 
             for property in self.properties_by_id.values():
+                if not property.is_export:
+                    continue
                 setter_name = (
                     property.setter.name
                     if isinstance(property.setter, CodeMethod)
