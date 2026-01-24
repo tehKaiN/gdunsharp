@@ -526,7 +526,9 @@ class CodeClass(CodeType, CodeTypeScope):
                 call_params = ""
 
             out = f"void EmitSignal{delegate.get_signal_name()}({method_params}) {{\n"
-            out += f"\temit_signal(SNAME({delegate.get_signal_name()}){call_params})\n"
+            out += (
+                f'\temit_signal(SNAME("{delegate.get_signal_name()}"){call_params})\n'
+            )
             out += f"}}\n\n"
             return out
 
