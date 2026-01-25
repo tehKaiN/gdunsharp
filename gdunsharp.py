@@ -151,36 +151,6 @@ class CodeDelegate(CodeType):
         return self.name.removesuffix("EventHandler")
 
 
-class VariantInfo:
-    def __init__(self, type: CodeType):
-        self.property_hint_enum = "PROPERTY_HINT_NONE"
-        self.property_hint_value = ""
-
-        match type.name:
-            case "int" | "bool" | "string" | "float" | "Color":
-                self.type_enum = f"Variant::{type.name.upper()}"
-                return
-
-        if isinstance(type, CodeEnum):
-            self.type_enum = "Variant::INT"
-            self.property_hint_enum = "PROPERTY_HINT_ENUM"
-            self.property_hint_value = ", ".join(
-                [f"{entry.name}:{entry.value}" for entry in type.entries]
-            )
-        elif isinstance(type, CodeClass) and type.is_godotic:
-            self.type_enum = "Variant::OBJECT"
-            # TODO: PROPERTY_HINT_RESOURCE_TYPE, "PackedScene" for PackedScene, etc
-            self.property_hint_enum = "PROPERTY_HINT_RESOURCE_TYPE"
-            self.property_hint_value = type.name
-            self.godot_class_name = type.name
-            return
-        else:
-            self.type_enum = "Variant::NIL"
-
-    def get_property_info(self, name: str) -> str:
-        return f'PropertyInfo({self.type_enum}, "{name}", {self.property_hint_enum}, "{self.property_hint_value}")'
-
-
 class CodeTypeScope:
     def __init__(self: CodeTypeScope, parent: CodeTypeScope | None):
         self.types_by_id: dict[str, CodeType] = {}
@@ -205,7 +175,7 @@ class CodeNullableType(CodeType):
         return False
 
 
-class ExternalType(CodeType):
+class CodeExternalType(CodeType):
     def __init__(self, name: str, is_ref: bool, parent_type_scope: CodeTypeScope):
         super().__init__(
             name=name,
@@ -446,7 +416,7 @@ class CodeClass(CodeType, CodeTypeScope):
             )
             if base_type not in self.bases:
                 assert isinstance(base_type, CodeClass) or isinstance(
-                    base_type, ExternalType
+                    base_type, CodeExternalType
                 )
                 self.bases.append(base_type)
 
@@ -864,6 +834,36 @@ class Codebase:
         self.emit_gdmodule_config_py(path, project_name)
 
 
+class VariantInfo:
+    def __init__(self, type: CodeType):
+        self.property_hint_enum = "PROPERTY_HINT_NONE"
+        self.property_hint_value = ""
+
+        match type.name:
+            case "int" | "bool" | "string" | "float" | "Color":
+                self.type_enum = f"Variant::{type.name.upper()}"
+                return
+
+        if isinstance(type, CodeEnum):
+            self.type_enum = "Variant::INT"
+            self.property_hint_enum = "PROPERTY_HINT_ENUM"
+            self.property_hint_value = ", ".join(
+                [f"{entry.name}:{entry.value}" for entry in type.entries]
+            )
+        elif isinstance(type, CodeClass) and type.is_godotic:
+            self.type_enum = "Variant::OBJECT"
+            # TODO: PROPERTY_HINT_RESOURCE_TYPE, "PackedScene" for PackedScene, etc
+            self.property_hint_enum = "PROPERTY_HINT_RESOURCE_TYPE"
+            self.property_hint_value = type.name
+            self.godot_class_name = type.name
+            return
+        else:
+            self.type_enum = "Variant::NIL"
+
+    def get_property_info(self, name: str) -> str:
+        return f'PropertyInfo({self.type_enum}, "{name}", {self.property_hint_enum}, "{self.property_hint_value}")'
+
+
 def parse_files(root_path: str) -> dict[str, Tree]:
     LANG_CSHARP = Language(tree_sitter_c_sharp.language())
     parser = Parser(LANG_CSHARP)
@@ -1118,7 +1118,7 @@ def get_type_from_node(
             resolved_type = codebase.resolve_type(type_id, namespaces, parent_scope)
             if not resolved_type:
                 # TODO: replace with assert after implementing nested class
-                resolved_type = ExternalType(
+                resolved_type = CodeExternalType(
                     type_id,
                     is_ref=True,
                     parent_type_scope=parent_scope,

@@ -68,13 +68,14 @@ Current level: **5**.
 - emit nested types
 - read method bodies
 - emit method bodies
-- read static methods
+- emit static methods
 - resolve extension methods
 - resolve generic parameters in class
 - resolve generic parameters in methods
 
 ## Level 7 - usable in MJR
 
+- `[Tool]`
 - `using Foo = Bar`
 - `async`/`await`
 - somehow support Newtonsoft.JSON
@@ -84,4 +85,4 @@ Current level: **5**.
 
 - read scoped namespaces
 - build as GDExtension
-- use lowered source code, sanitized for tree-sitter
+- use lowered source code, sanitized for tree-sitter?

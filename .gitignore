@@ -1,4 +1,5 @@
 .vscode
+.mypy_cache
 
 # KaiN's private project code, sorry!
 test_scripts/gdfire
