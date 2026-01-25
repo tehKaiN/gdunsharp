@@ -709,6 +709,99 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         return out
 
 
+class CodeVariable(CodeIdentifier):
+    def __init__(self, name, id=""):
+        # TODO: a superclass/interface for CodeLocalVariable, CodeField or CodeProperty
+        super().__init__(name, id)
+
+
+class CodeVariableRef(CodeIdentifier):
+    def __init__(self, name):
+        super().__init__(name, name)
+
+    def resolve(self) -> CodeVariable:
+        # TODO: resolve to either CodeLocalVariable, CodeField or CodeProperty
+        assert False
+
+
+class CodeExpression:
+    def __init__(self):
+        pass
+
+
+class CodeStatement(CodeExpression):
+    def __init__(self):
+        pass
+
+
+class CodeBlock:
+    def __init__(self):
+        self.statements: list[CodeStatement] = []
+        self.variables: list[CodeVariableRef] = []
+        # TODO: inherit from CodeTypeScope?
+
+
+class CodeMethodCallExpression(CodeExpression):
+    def __init__(
+        self,
+        method: CodeMethod,
+        generic_args: list[CodeExpression],
+        args: list[CodeExpression],
+    ):
+        super().__init__()
+        self.method = method
+        self.generic_args = generic_args
+        self.args = args
+
+
+class CodeAssignemntExpression(CodeExpression):
+    def __init__(self, variable: CodeVariableRef, value_expression: CodeExpression):
+        super().__init__()
+        self.variable = variable
+        self.value_expression = value_expression
+
+
+class CodeBinaryExpression(CodeExpression):
+    def __init__(self, base_expression, on_null_expression):
+        super().__init__()
+        self.base_expression = base_expression
+        self.on_null_expression = on_null_expression
+
+
+class CodeStringLiteralExpression(CodeExpression):
+    def __init__(self, string: str):
+        super().__init__()
+        self.string = string
+
+
+class CodeObjectCreationExpression(CodeExpression):
+    # TODO: subclass of CodeMethodCallExpression?
+    def __init__(
+        self,
+        obj_type: CodeType,
+        generic_args: list[CodeExpression],
+        args: list[CodeExpression],
+    ):
+        super().__init__()
+        self.obj_type = obj_type
+        self.generic_args = generic_args
+        self.args = args
+
+
+class CodeThrowExceptionExpression(CodeExpression):
+    # TODO: subclass of CodeMethodCallExpression?
+    def __init__(self, throwed_expression: CodeExpression):
+        super().__init__()
+        self.throwed_expression = throwed_expression
+
+
+class CodeMemberAccessExpression(CodeExpression):
+    def __init__(self, container: CodeExpression, member: CodeVariableRef):
+        super().__init__()
+        self.container = container
+        self.member = member
+
+
 class Codebase:
     def __init__(self):
         self.global_namespace = CodeNamespace(name="", parent=None)
@@ -797,7 +890,7 @@ class Codebase:
 
         # TODO: namespace includes
         for godotic_class in godotic_classes:
-            if godotic_class.name == "RandomProjectileSpawner":
+            if godotic_class.name == "RandomProjectileSpawner" or True:
                 out += f"#include <{godotic_class.get_include_path()}>\n"
         out += "\n"
 
@@ -808,7 +901,7 @@ class Codebase:
         out += "\n"
 
         for godotic_class in godotic_classes:
-            if godotic_class.name == "RandomProjectileSpawner":
+            if godotic_class.name == "RandomProjectileSpawner" or True:
                 parent_namespace = godotic_class.parent_type_scope
                 assert isinstance(parent_namespace, CodeNamespace)
                 namespace_path = parent_namespace.get_full_path().replace(".", "::")

@@ -78,6 +78,7 @@ Current level: **5**.
 - `[Tool]`
 - `using Foo = Bar`
 - `async`/`await`
+- pattern matching
 - somehow support Newtonsoft.JSON
 - replace `System.Collections.RegularExpressions.Regex` with CTRE
 
