@@ -6,6 +6,12 @@ This project doesn't try to be complete C# solution and just limits its scope to
 
 ## Usage
 
+Prerequisites:
+
+- A godot repo cloned, checked out to desired version, configured and built at least once
+- Python >= 3.10
+- `pip install tree-sitter tree-sitter-c-sharp`
+
 TODO
 
 ## How it works
@@ -29,7 +35,7 @@ The code translation works as follows:
 
 1. Read files with tree-sitter
 1. Translate tree-sitter's tree to code outline with additional context
-1. Emit C++
+1. Emit C++ based on extended code outline
 1. ???
 1. PROFIT
 
