@@ -188,16 +188,6 @@ class CodeExternalType(CodeType):
         return True
 
 
-class CodeParam(CodeIdentifier):
-    def __init__(self, name: str, type: CodeType, default_value: str | None):
-        super().__init__(name)
-        self.type = type
-        self.default_value = default_value
-
-    def get_declaration(self) -> str:
-        return f"{self.type.get_expression()} {self.name}"
-
-
 class CodeVirtualKind(Enum):
     NONE = 0
     VIRTUAL = 1
@@ -210,8 +200,8 @@ class CodeAccessorKind(Enum):
     SET = 1
 
 
-class CodeAutoAccessorMethod:
-    def __init__(self, kind: CodeAccessorKind, field: CodeField | None):
+class CodeAutoAccessorMethodBody:
+    def __init__(self, kind: CodeAccessorKind, field: CodeVariable | None):
         self.kind = kind
         self.field = field
 
@@ -224,7 +214,8 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         params: list[CodeParam],
         generic_params: list[CodeGenericParameter],
         parent_class: CodeClass,
-        body_source: Node | CodeAutoAccessorMethod | None,
+        declaration_virtual_kind: CodeVirtualKind,
+        body_source: Node | CodeAutoAccessorMethodBody | None,
     ):
         id = name
         if len(generic_params):
@@ -240,9 +231,21 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         self.body_source = body_source
         self.is_node_virtual = False
         self.property: CodeProperty | None = None
+        self.body_block: CodeBlock | None = None
 
         for generic_param in generic_params:
             self.types_by_id[generic_param.id] = generic_param
+
+        virtual_kind = declaration_virtual_kind
+        if parent_class.kind == CodeClassKind.INTERFACE:
+            virtual_kind = CodeVirtualKind.PURE
+        elif virtual_kind != CodeVirtualKind.OVERRIDE:
+            # Check for implementation of interfaces
+            parent_method = parent_class.find_virtual_method_in_bases(self.id)
+            if parent_method and parent_method.virtual_kind != CodeVirtualKind.NONE:
+                # print(f"detected method {parent_class.id}::{method.id} as interface implementation")
+                virtual_kind = CodeVirtualKind.OVERRIDE
+        self.virtual_kind = virtual_kind
 
     def get_declaration(self) -> str:
         out = ""
@@ -266,20 +269,28 @@ class CodeMethod(CodeIdentifier, CodeTypeScope):
         if self.virtual_kind != CodeVirtualKind.PURE:
             assert isinstance(self.parent, CodeClass)
             out += f"{self.return_type.get_expression()} {self.parent.name}::{self.name}({', '.join([f'{p.type.get_expression()} {p.name}' for p in self.params])}) {{\n"
-            if self.return_type.id != "void":
+            if self.body_block:
+                for statement in self.body_block.statements:
+                    out += f"\t{statement.emit()};\n"
+            elif self.return_type.id != "void":
                 out += "\treturn {};\n"
             out += f"}}"
         return out
 
 
-# TODO: unify with CodeVariable?
-class CodeField(CodeIdentifier):
+class CodeVariable(CodeIdentifier):
     def __init__(self, name: str, type: CodeType):
         super().__init__(name)
         self.type = type
 
     def get_declaration(self) -> str:
         return f"{self.type.get_expression()} {self.name};"
+
+
+class CodeParam(CodeVariable):
+    def __init__(self, name: str, type: CodeType, default_value: str | None):
+        super().__init__(name, type)
+        self.default_value = default_value
 
 
 # 3 types of properties:
@@ -386,7 +397,7 @@ class CodeClass(CodeType, CodeTypeScope):
         self.is_godotic = False
         self.ancestors: list[CodeClass] = []
         self.properties_by_id: dict[str, CodeProperty] = {}
-        self.fields_by_id: dict[str, CodeField] = {}
+        self.fields_by_id: dict[str, CodeVariable] = {}
         self.methods_by_id: dict[str, CodeMethod] = {}
         self.delegates_by_id: dict[str, CodeDelegate] = {}
         self.usings: list[CodeNamespace] = []
@@ -709,56 +720,52 @@ class CodeNamespace(CodeIdentifier, CodeTypeScope):
         return out
 
 
-class CodeVariable(CodeIdentifier):
-    def __init__(self, name, id=""):
-        # TODO: a superclass/interface for CodeLocalVariable, CodeField or CodeProperty
-        super().__init__(name, id)
-
-
-class CodeVariableRef(CodeIdentifier):
-    def __init__(self, name):
-        super().__init__(name, name)
-
-    def resolve(self) -> CodeVariable:
-        # TODO: resolve to either CodeLocalVariable, CodeField or CodeProperty
-        assert False
-
-
 class CodeExpression:
     def __init__(self):
         pass
 
+    def expand(self, block_expressions: list[CodeExpression]) -> bool:
+        raise NotImplementedError(f"{type(self).__name__}.expand()")
 
-class CodeStatement(CodeExpression):
-    def __init__(self):
-        pass
+    def emit(self) -> str:
+        raise NotImplementedError(f"{type(self).__name__}.emit()")
 
 
 class CodeBlock:
     def __init__(self):
-        self.statements: list[CodeStatement] = []
-        self.variables: list[CodeVariableRef] = []
+        self.statements: list[CodeExpression] = []
+        self.variables: list[CodeVariable] = []
         # TODO: inherit from CodeTypeScope?
 
 
 class CodeMethodCallExpression(CodeExpression):
     def __init__(
         self,
-        method: CodeMethod,
+        method_expression: CodeExpression,
         generic_args: list[CodeExpression],
         args: list[CodeExpression],
     ):
         super().__init__()
-        self.method = method
+        self.method_expression = method_expression
         self.generic_args = generic_args
         self.args = args
 
+    def emit(self) -> str:
+        out = self.method_expression.emit()
+        if len(self.generic_args):
+            out += f"<{', '.join([arg.emit() for arg in self.generic_args])}>"
+        out += f"({', '.join([arg.emit() for arg in self.args])})"
+        return out
+
 
 class CodeAssignemntExpression(CodeExpression):
-    def __init__(self, variable: CodeVariableRef, value_expression: CodeExpression):
+    def __init__(self, variable: CodeVariable, value_expression: CodeExpression):
         super().__init__()
         self.variable = variable
         self.value_expression = value_expression
+
+    def emit(self) -> str:
+        return f"{self.variable.name} = {self.value_expression.emit()}"
 
 
 class CodeBinaryExpression(CodeExpression):
@@ -772,6 +779,9 @@ class CodeStringLiteralExpression(CodeExpression):
     def __init__(self, string: str):
         super().__init__()
         self.string = string
+
+    def emit(self) -> str:
+        return f'"{self.string}"'
 
 
 class CodeObjectCreationExpression(CodeExpression):
@@ -796,10 +806,31 @@ class CodeThrowExceptionExpression(CodeExpression):
 
 
 class CodeMemberAccessExpression(CodeExpression):
-    def __init__(self, container: CodeExpression, member: CodeVariableRef):
+    def __init__(self, container: CodeExpression, member: CodeVariable):
         super().__init__()
         self.container = container
         self.member = member
+
+
+class CodeVariableValueExpression(CodeExpression):
+    def __init__(self, variable: CodeVariable):
+        super().__init__()
+        self.variable = variable
+
+    def emit(self) -> str:
+        return self.variable.name
+
+
+class CodeReturnStatement(CodeExpression):
+    def __init__(self, returned_expression: CodeExpression | None):
+        super().__init__()
+        self.returned_expression = returned_expression
+
+    def emit(self) -> str:
+        if self.returned_expression:
+            return f"return {self.returned_expression.emit()}"
+        else:
+            return "return"
 
 
 class Codebase:
@@ -1231,7 +1262,7 @@ def get_type_from_node(
 
 
 def create_property_for_field(
-    field: CodeField, parent_classlike: CodeClass, namespaces: list[CodeNamespace]
+    field: CodeVariable, parent_classlike: CodeClass, namespaces: list[CodeNamespace]
 ) -> CodeProperty:
     getter = CodeMethod(
         f"get_{field.name}",
@@ -1239,7 +1270,8 @@ def create_property_for_field(
         params=[],
         generic_params=[],
         parent_class=parent_classlike,
-        body_source=CodeAutoAccessorMethod(CodeAccessorKind.GET, field),
+        declaration_virtual_kind=CodeVirtualKind.NONE,
+        body_source=CodeAutoAccessorMethodBody(CodeAccessorKind.GET, field),
     )
     parent_classlike.methods_by_id[getter.id] = getter
 
@@ -1251,7 +1283,8 @@ def create_property_for_field(
         params=[CodeParam("value", field.type, None)],
         generic_params=[],
         parent_class=parent_classlike,
-        body_source=CodeAutoAccessorMethod(CodeAccessorKind.SET, field),
+        declaration_virtual_kind=CodeVirtualKind.NONE,
+        body_source=CodeAutoAccessorMethodBody(CodeAccessorKind.SET, field),
     )
     parent_classlike.methods_by_id[setter.id] = setter
 
@@ -1310,13 +1343,13 @@ def create_class_delegate(
     )
     parent_classlike.delegates_by_id[delegate.id] = delegate
 
-    print(f"got delegate {delegate_name} in class {parent_classlike.name}")
+    # print(f"got delegate {delegate_name} in class {parent_classlike.name}, signal: {delegate.is_signal}")
     return delegate
 
 
 def create_class_field(
     parent_classlike: CodeClass, node: Node, namespaces: list[CodeNamespace]
-) -> CodeField:
+) -> CodeVariable:
     is_export = False
     for child_node in node.named_children:
         if child_node.grammar_name == NodeKind.VARIABLE_DECLARATION.value:
@@ -1341,7 +1374,7 @@ def create_class_field(
 
     assert name_node.text
     field_name = name_node.text.decode()
-    field = CodeField(field_name, field_type)
+    field = CodeVariable(field_name, field_type)
     parent_classlike.fields_by_id[field.id] = field
 
     if is_export:
@@ -1355,8 +1388,8 @@ def create_class_property(
 ) -> CodeProperty:
     type_node: Node | None = None
     name_node: Node | None = None
-    getter_body: Node | CodeAutoAccessorMethod | None = None
-    setter_body: Node | CodeAutoAccessorMethod | None = None
+    getter_body: Node | CodeAutoAccessorMethodBody | None = None
+    setter_body: Node | CodeAutoAccessorMethodBody | None = None
     is_export = False
     for child_node in node.named_children:
         match child_node.grammar_name:
@@ -1418,12 +1451,12 @@ def create_class_property(
 
     if not getter_body and not setter_body:
         if parent_class.kind != CodeClassKind.INTERFACE:
-            property_field = CodeField(property_name, property_type)
+            property_field = CodeVariable(property_name, property_type)
             parent_class.fields_by_id[property_field.id] = property_field
         else:
             property_field = None
-        getter_body = CodeAutoAccessorMethod(CodeAccessorKind.GET, property_field)
-        setter_body = CodeAutoAccessorMethod(CodeAccessorKind.SET, property_field)
+        getter_body = CodeAutoAccessorMethodBody(CodeAccessorKind.GET, property_field)
+        setter_body = CodeAutoAccessorMethodBody(CodeAccessorKind.SET, property_field)
 
     getter = CodeMethod(
         f"get_{property_name}",
@@ -1431,21 +1464,25 @@ def create_class_property(
         params=[],
         generic_params=[],
         parent_class=parent_class,
+        declaration_virtual_kind=CodeVirtualKind.NONE,
         body_source=getter_body,
     )
     parent_class.methods_by_id[getter.id] = getter
 
-    void_type = codebase.resolve_type("void", namespaces, parent_class)
-    assert void_type
-    setter = CodeMethod(
-        f"set_{property_name}",
-        void_type,
-        params=[CodeParam("value", property_type, None)],
-        generic_params=[],
-        parent_class=parent_class,
-        body_source=setter_body,
-    )
-    parent_class.methods_by_id[setter.id] = setter
+    setter = None
+    if setter_body:
+        void_type = codebase.resolve_type("void", namespaces, parent_class)
+        assert void_type
+        setter = CodeMethod(
+            f"set_{property_name}",
+            void_type,
+            params=[CodeParam("value", property_type, None)],
+            generic_params=[],
+            parent_class=parent_class,
+            declaration_virtual_kind=CodeVirtualKind.NONE,
+            body_source=setter_body,
+        )
+        parent_class.methods_by_id[setter.id] = setter
 
     property = CodeProperty(property_name, property_type, is_export, getter, setter)
     parent_class.properties_by_id[property.id] = property
@@ -1488,7 +1525,7 @@ def parse_params_from_node(
     return params
 
 
-def create_class_method(
+def create_class_method_from_declaration(
     parent_class: CodeClass,
     node: Node,
     namespaces: list[CodeNamespace],
@@ -1556,18 +1593,9 @@ def create_class_method(
         params,
         generic_params,
         parent_class=parent_class,
+        declaration_virtual_kind=virtual_kind,
         body_source=body_node,
     )
-
-    if parent_class.kind == CodeClassKind.INTERFACE:
-        virtual_kind = CodeVirtualKind.PURE
-    elif virtual_kind != CodeVirtualKind.OVERRIDE:
-        # Check for implementation of interfaces
-        parent_method = parent_class.find_virtual_method_in_bases(method.id)
-        if parent_method and parent_method.virtual_kind != CodeVirtualKind.NONE:
-            # print(f"detected method {parent_class.id}::{method.id} as interface implementation")
-            virtual_kind = CodeVirtualKind.OVERRIDE
-    method.virtual_kind = virtual_kind
 
     parent_class.methods_by_id[method.id] = method
     # print(f"Found method {parent_class.name}::{method.name}()")
@@ -1632,7 +1660,9 @@ def gather_class_elements(codebase: Codebase):
                     case NodeKind.FIELD_DECLARATION.value:
                         create_class_field(classlike, declaration_node, namespaces)
                     case NodeKind.METHOD_DECLARATION.value:
-                        create_class_method(classlike, declaration_node, namespaces)
+                        create_class_method_from_declaration(
+                            classlike, declaration_node, namespaces
+                        )
                     case NodeKind.PROPERTY_DECLARATION.value:
                         create_class_property(classlike, declaration_node, namespaces)
 
@@ -1690,6 +1720,42 @@ def fix_godot_virtuals(codebase: Codebase):
                     base_class = base_class.get_base_class()
                 if not has_override_parent:
                     method.virtual_kind = CodeVirtualKind.VIRTUAL
+
+
+def generate_method_body(classlike: CodeClass, method: CodeMethod):
+    if (
+        isinstance(method.body_source, CodeAutoAccessorMethodBody)
+        and method.virtual_kind != CodeVirtualKind.PURE
+    ):
+        property_field = method.body_source.field
+        assert property_field
+        method.body_block = CodeBlock()
+        if method.body_source.kind == CodeAccessorKind.GET:
+            field_value_expr = CodeVariableValueExpression(property_field)
+            return_stmt = CodeReturnStatement(field_value_expr)
+            method.body_block.statements.append(return_stmt)
+        elif method.body_source.kind == CodeAccessorKind.SET:
+            assert len(method.params) == 1
+            value_expr = CodeVariableValueExpression(method.params[0])
+            assign_stmt = CodeAssignemntExpression(property_field, value_expr)
+            method.body_block.statements.append(assign_stmt)
+        else:
+            raise NotImplementedError(f"accessor kind: {method.body_source.kind}")
+    elif isinstance(method.body_source, Node):
+        pass
+    elif not method.body_source:
+        # Pure virtual methods, something else?
+        print(f"Method without body: {classlike.name}::{method.id}")
+
+
+def generate_method_bodies(codebase: Codebase):
+    classlikes = [
+        t for t in codebase.get_all_namespace_types() if isinstance(t, CodeClass)
+    ]
+
+    for classlike in classlikes:
+        for method in classlike.methods_by_id.values():
+            generate_method_body(classlike, method)
 
 
 def prepare_out_directory(out_path: str):
@@ -1886,6 +1952,7 @@ gather_namespaces_and_types(trees, codebase)
 gather_class_elements(codebase)
 consolidate_class_usings(codebase)
 fix_godot_virtuals(codebase)
+generate_method_bodies(codebase)
 
 # Step 3: emit cpp code based on the code database
 out_path = f"{modules_directory}/{project_dir}"
